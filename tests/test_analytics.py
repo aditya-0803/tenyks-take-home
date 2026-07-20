@@ -120,3 +120,35 @@ def test_bottom_strip_handles_frame_clipped_box():
     )
     assert results_strip[0].engaged
     assert results_strip[0].dwell_s == pytest.approx(19.0, abs=1.0)
+
+
+def test_hybrid_handles_kiosk_occluded_feet():
+    """Person at the kiosk whose legs are hidden behind the machine: the
+    detected box bottom sits at the machine top, OUTSIDE a zone polygon
+    drawn on the customer side. bottom_strip fails; hybrid's whole-box
+    overlap still counts them."""
+    frame_w, frame_h = 200, 200
+    zone = Zone([[100, 0], [200, 0], [200, 200], [100, 200]])  # right half
+    times = np.arange(0, 20, 1.0)
+    # Box straddles the boundary: left 40% outside, right 60% inside; its
+    # bottom strip is mostly outside (person's visible bottom is on the
+    # machine, at x<100 heavy). Make bottom strip < 50% in-zone but whole
+    # box >= 35% in-zone: box x 60..160 -> 60% of width in-zone... strip
+    # same ratio. Instead shift: box x 40..140 -> 40% in-zone (fails strip
+    # at 0.5) but passes box_overlap at 0.35.
+    boxes = np.array([[40, 50, 140, 150]] * len(times), dtype=float)
+    identity = {
+        1: {
+            "times": times,
+            "frame_indices": np.arange(len(times)),
+            "boxes": boxes,
+            "source_tids": [1],
+        }
+    }
+    strip_cfg = AnalyticsCfg(membership="bottom_strip", hysteresis_samples=1, min_engagement_s=8.0)
+    r_strip, _ = compute_person_results(identity, zone, strip_cfg, 1.0, frame_size=(frame_w, frame_h))
+    assert not r_strip[0].engaged
+
+    hybrid_cfg = AnalyticsCfg(membership="hybrid", hysteresis_samples=1, min_engagement_s=8.0)
+    r_hybrid, _ = compute_person_results(identity, zone, hybrid_cfg, 1.0, frame_size=(frame_w, frame_h))
+    assert r_hybrid[0].engaged

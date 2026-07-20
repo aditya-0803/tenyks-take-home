@@ -49,25 +49,33 @@ def _in_zone_flags(
 ) -> np.ndarray:
     """Zone membership per box.
 
-    "bottom_strip" (default): fraction of the box's bottom strip covered by
-    the zone mask must reach min_overlap. Robust to boxes clipped by the
-    frame edge and to feet occluded by the kiosk itself — failure modes of
-    the single-point anchor test.
+    "bottom_strip": fraction of the box's bottom strip covered by the zone
+    mask must reach min_overlap. Robust to boxes clipped by the frame edge.
+    "hybrid" (default): bottom_strip OR a fraction >= box_overlap of the
+    WHOLE box inside the zone. Covers people whose feet/legs are occluded
+    by the kiosk machine itself: their box bottom sits on the machine top,
+    outside a polygon drawn on the customer side, but most of their body
+    still overlaps the zone.
     "anchor": point-in-polygon test of one anchor point.
     """
     if cfg.membership == "anchor" or zone_mask is None:
         return zone.contains(anchor_points(boxes, cfg.anchor))
-    if cfg.membership != "bottom_strip":
+    if cfg.membership not in ("bottom_strip", "hybrid"):
         raise ValueError(f"Unknown membership mode '{cfg.membership}'")
     h, w = zone_mask.shape
     flags = np.zeros(len(boxes), dtype=bool)
     for i, (x1, y1, x2, y2) in enumerate(boxes):
-        sy1 = y2 - cfg.strip_frac * (y2 - y1)
         ix1, ix2 = int(max(x1, 0)), int(min(x2, w))
-        iy1, iy2 = int(max(sy1, 0)), int(min(y2, h))
-        if ix2 <= ix1 or iy2 <= iy1:
+        iy2 = int(min(y2, h))
+        sy1 = int(max(y2 - cfg.strip_frac * (y2 - y1), 0))
+        if ix2 <= ix1 or iy2 <= 0:
             continue
-        flags[i] = zone_mask[iy1:iy2, ix1:ix2].mean() >= cfg.min_overlap
+        if sy1 < iy2 and zone_mask[sy1:iy2, ix1:ix2].mean() >= cfg.min_overlap:
+            flags[i] = True
+        elif cfg.membership == "hybrid":
+            by1 = int(max(y1, 0))
+            if by1 < iy2:
+                flags[i] = zone_mask[by1:iy2, ix1:ix2].mean() >= cfg.box_overlap
     return flags
 
 
@@ -140,7 +148,7 @@ def compute_person_results(
     timelines: list[PersonTimeline] = []
     bridge_dt = 3.0 * sample_period  # unseen gaps longer than this don't count
     zone_mask = None
-    if cfg.membership == "bottom_strip" and frame_size is not None:
+    if cfg.membership in ("bottom_strip", "hybrid") and frame_size is not None:
         zone_mask = zone.mask(frame_size[1], frame_size[0])
 
     for pid, data in identities.items():

@@ -22,9 +22,19 @@ def unit(v):
 
 def test_temporal_overlap_is_infinite_cost():
     a = make_tracklet(1, 0, 50)
-    b = make_tracklet(2, 40, 90)  # overlaps a
+    b = make_tracklet(2, 40, 90)  # overlaps a by 10s >> max_overlap_s
     e = unit([1, 0, 0])
     assert link_cost(a, b, e, e, CFG) >= 1e6
+
+
+def test_brief_overlap_from_id_switch_is_linkable():
+    """At an ID switch the dying track coasts a few frames while the new
+    one starts; fragments of one person briefly coexist and must still be
+    linkable (within max_overlap_s)."""
+    a = make_tracklet(1, 0, 50.0)
+    b = make_tracklet(2, 49.5, 90)  # 0.5s overlap < max_overlap_s = 1.0
+    e = unit([1, 0, 0])
+    assert link_cost(a, b, e, e, CFG) < CFG.appearance_thresh
 
 
 def test_gap_and_speed_gates():

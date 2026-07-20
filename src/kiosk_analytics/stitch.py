@@ -159,7 +159,10 @@ def link_cost(a: Tracklet, b: Tracklet, emb_a, emb_b, cfg: StitchCfg) -> float:
     appearance embeddings.
     """
     gap = b.start - a.end
-    if gap <= 0 or gap > cfg.max_gap_s:
+    # gap may be slightly negative: at an ID switch the dying track coasts
+    # a few frames while its replacement starts, so fragments of one person
+    # briefly coexist. Long overlap still means provably different people.
+    if gap < -cfg.max_overlap_s or gap > cfg.max_gap_s:
         return INF
     dist = float(np.linalg.norm(b.entry_point - a.exit_point))
     if dist / max(gap, 0.5) > cfg.max_speed_px_s:

@@ -79,9 +79,11 @@ def render_overlay(
 
         entries = per_frame.get(sample.index, [])
         for pid, box, dwell, in_zone in entries:
+            if not in_zone and not cfg.viz.show_out_of_zone:
+                continue
             x1, y1, x2, y2 = (int(round(v)) for v in box)
-            # In-zone: person's colour, bold. Out-of-zone: thin gray
-            # (tracked but not currently accruing dwell).
+            # In-zone: person's colour, bold. Out-of-zone (if shown): thin
+            # gray (tracked but not currently accruing dwell).
             color = _color(pid) if in_zone else (140, 140, 140)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if in_zone else 1)
             _draw_label(frame, f"ID {pid} | {dwell:.0f}s", x1, y1, color)

@@ -21,6 +21,8 @@ detector:
   iou: 0.7                # unused by NMS-free RT-DETR; kept for interface parity
   imgsz: 1280
   device: auto
+  nms_iou: 0.8            # RT-DETR is NMS-free and can emit duplicate boxes
+                          # per person in crowds -> phantom tracks -> ID churn
 
 tracker:
   type: strongsort
@@ -32,6 +34,7 @@ stitch:
   backend: auto
   reid_weights: osnet_x0_25_msmt17.pt
   max_gap_s: 150.0
+  max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
   appearance_thresh: 0.45
   max_speed_px_s: 400.0
   min_height_ratio: 0.6
@@ -41,9 +44,10 @@ stitch:
   allow_fallback: false
 
 analytics:
-  membership: bottom_strip
+  membership: hybrid
   strip_frac: 0.25
   min_overlap: 0.5
+  box_overlap: 0.35
   anchor: bottom_center
   hysteresis_samples: 3
   merge_gap_s: 3.0
@@ -53,3 +57,4 @@ analytics:
 viz:
   enabled: true
   show_zone: true
+  show_out_of_zone: false # hide boxes for people outside the kiosk zone
