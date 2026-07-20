@@ -1,0 +1,53 @@
+# Kiosk analytics pipeline configuration.
+# All time units are seconds, all coordinates are pixels in the source video.
+
+# Polygon (customer side of the kiosks + queue corridor), drawn on a 1280x720
+# reference frame by hand (Adi, 2026-07-16). Canonical zone for all experiments.
+zone_polygon:
+  - [406, 701]
+  - [429, 715]
+  - [1007, 714]
+  - [1022, 396]
+  - [695, 345]
+
+video:
+  target_fps: 10.0        # inference sampling rate; dwell needs ~1s precision
+
+detector:
+  model: yolo11m.pt       # any ultralytics-loadable weights (yolo11*, rtdetr-l.pt, ...)
+  conf: 0.3
+  iou: 0.7
+  imgsz: 1280
+  device: auto            # auto | cuda:0 | cpu | mps
+
+tracker:
+  type: bytetrack         # bytetrack | botsort | ocsort (via boxmot)
+  reid_weights: osnet_x0_25_msmt17.pt   # used by botsort only
+  params: {}              # passed straight to the boxmot tracker constructor
+
+stitch:
+  enabled: true
+  backend: auto           # auto -> boxmot OSNet, falls back to torchvision resnet18
+  reid_weights: osnet_x0_25_msmt17.pt
+  max_gap_s: 150.0        # max absence before we refuse to re-link a track
+  appearance_thresh: 0.45 # max cosine distance for a merge
+  max_speed_px_s: 400.0   # exit->entry displacement plausibility gate
+  min_height_ratio: 0.6   # box-height similarity gate between linked tracks
+  max_height_ratio: 1.7
+  crops_per_track: 8      # best crops kept per tracklet for embedding
+  save_debug: true        # write stitch_debug.json + crops/ montages
+  allow_fallback: false   # fail loudly rather than stitch with non-re-ID features
+
+analytics:
+  membership: bottom_strip # bottom_strip (robust to clipped/occluded feet) | anchor
+  strip_frac: 0.25         # bottom fraction of the box tested against the zone mask
+  min_overlap: 0.5         # required in-zone fraction of that strip
+  anchor: bottom_center    # only used when membership: anchor
+  hysteresis_samples: 3   # consecutive samples required to flip in/out state
+  merge_gap_s: 3.0        # in-zone segments closer than this are merged
+  min_engagement_s: 8.0   # total dwell below this => walk-through, not counted
+  min_track_len_s: 1.0    # discard tracks shorter than this (detector noise)
+
+viz:
+  enabled: true
+  show_zone: true

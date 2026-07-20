@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Model weights (auto-downloaded on first run)
+*.pt
+*.pth
+*.onnx
+
+# Data & outputs
+runs/
+*.mp4
+*.avi
+*.mkv
+zone.png
+frame.png
+
+# Environments / IDE
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store

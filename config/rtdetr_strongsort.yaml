@@ -1,0 +1,55 @@
+# Baseline candidate: RT-DETR-l detector + StrongSORT tracker.
+# RT-DETR: transformer detector, NMS-free — better for overlapping people
+# in the queue. StrongSORT: appearance-aware tracker (OSNet re-ID) — holds
+# IDs through occlusion better than motion-only trackers, at some speed cost.
+# Everything except detector/tracker matches config/default.yaml.
+
+zone_polygon:
+  - [406, 701]
+  - [429, 715]
+  - [1007, 714]
+  - [1022, 396]
+  - [695, 345]
+
+video:
+  target_fps: 10.0
+
+detector:
+  model: rtdetr-l.pt
+  conf: 0.4               # RT-DETR confidences run higher than YOLO's;
+                          # 0.3 lets in more low-quality boxes than it's worth
+  iou: 0.7                # unused by NMS-free RT-DETR; kept for interface parity
+  imgsz: 1280
+  device: auto
+
+tracker:
+  type: strongsort
+  reid_weights: osnet_x0_25_msmt17.pt
+  params: {}
+
+stitch:
+  enabled: true
+  backend: auto
+  reid_weights: osnet_x0_25_msmt17.pt
+  max_gap_s: 150.0
+  appearance_thresh: 0.45
+  max_speed_px_s: 400.0
+  min_height_ratio: 0.6
+  max_height_ratio: 1.7
+  crops_per_track: 8
+  save_debug: true
+  allow_fallback: false
+
+analytics:
+  membership: bottom_strip
+  strip_frac: 0.25
+  min_overlap: 0.5
+  anchor: bottom_center
+  hysteresis_samples: 3
+  merge_gap_s: 3.0
+  min_engagement_s: 8.0
+  min_track_len_s: 1.0
+
+viz:
+  enabled: true
+  show_zone: true
