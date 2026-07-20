@@ -36,6 +36,11 @@ class PersonDetector:
         self.model = model_cls(cfg.model)
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
+        offset = np.zeros(4, dtype=np.float32)
+        if self.cfg.roi is not None:
+            rx1, ry1, rx2, ry2 = self.cfg.roi
+            frame = frame[ry1:ry2, rx1:rx2]
+            offset = np.array([rx1, ry1, rx1, ry1], dtype=np.float32)
         result = self.model.predict(
             frame,
             classes=[PERSON_CLASS],
@@ -48,7 +53,7 @@ class PersonDetector:
         boxes = result.boxes
         if boxes is None or len(boxes) == 0:
             return np.empty((0, 6), dtype=np.float32)
-        xyxy = boxes.xyxy.cpu().numpy().astype(np.float32)
+        xyxy = boxes.xyxy.cpu().numpy().astype(np.float32) + offset
         conf = boxes.conf.cpu().numpy().astype(np.float32).reshape(-1, 1)
         cls = boxes.cls.cpu().numpy().astype(np.float32).reshape(-1, 1)
         dets = np.hstack([xyxy, conf, cls])

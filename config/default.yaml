@@ -11,27 +11,34 @@ zone_polygon:
   - [695, 345]
 
 video:
-  target_fps: 10.0        # inference sampling rate; dwell needs ~1s precision
+  target_fps: 15.0        # tracker association degrades at low fps (motion gates
+                          # and persistence windows assume ~30 fps); 15 is the compromise
 
 detector:
   model: yolo11m.pt       # any ultralytics-loadable weights (yolo11*, rtdetr-l.pt, ...)
   conf: 0.3
   iou: 0.7
   imgsz: 1280
-  device: auto            # auto | cuda:0 | cpu | mps
+  device: auto              # auto | cuda:0 | cpu | mps
+  roi: [350, 80, 1150, 720] # detect only around the kiosk area, upscaled to
+                            # imgsz: ~2x effective resolution on the queue,
+                            # no dining-area tracklets
 
 tracker:
   type: bytetrack         # bytetrack | botsort | ocsort (via boxmot)
-  reid_weights: osnet_x0_25_msmt17.pt   # used by botsort only
-  params: {}              # passed straight to the boxmot tracker constructor
+  reid_weights: osnet_x1_0_msmt17.pt   # used by botsort only
+  params:                 # filtered against the installed boxmot signature
+    frame_rate: 15        # match video.target_fps, not the 30fps default
+    track_buffer: 90      # keep lost tracks alive ~6s before dropping
 
 stitch:
   enabled: true
   backend: auto           # auto -> boxmot OSNet, falls back to torchvision resnet18
-  reid_weights: osnet_x0_25_msmt17.pt
+  reid_weights: osnet_x1_0_msmt17.pt
   max_gap_s: 150.0        # max absence before we refuse to re-link a track
   max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
-  appearance_thresh: 0.45 # max cosine distance for a merge
+  appearance_thresh: 0.30 # max cosine distance for a merge; from stitch_debug
+                          # on this footage: same person ~0.20, different ~0.33+
   max_speed_px_s: 400.0   # exit->entry displacement plausibility gate
   min_height_ratio: 0.6   # box-height similarity gate between linked tracks
   max_height_ratio: 1.7

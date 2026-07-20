@@ -12,7 +12,7 @@ zone_polygon:
   - [695, 345]
 
 video:
-  target_fps: 10.0
+  target_fps: 15.0
 
 detector:
   model: rtdetr-l.pt
@@ -21,21 +21,27 @@ detector:
   iou: 0.7                # unused by NMS-free RT-DETR; kept for interface parity
   imgsz: 1280
   device: auto
+  roi: [350, 80, 1150, 720] # detect only around the kiosk area, upscaled to
+                            # imgsz: ~2x effective resolution on the queue,
+                            # no dining-area tracklets
   nms_iou: 0.8            # RT-DETR is NMS-free and can emit duplicate boxes
                           # per person in crowds -> phantom tracks -> ID churn
 
 tracker:
   type: strongsort
-  reid_weights: osnet_x0_25_msmt17.pt
-  params: {}
+  reid_weights: osnet_x1_0_msmt17.pt
+  params:                 # filtered against the installed boxmot signature
+    max_age: 90           # frames a lost track survives (~6s at 15fps)
+    n_init: 2             # confirm tracks faster
+    max_cos_dist: 0.25    # appearance gate for association
 
 stitch:
   enabled: true
   backend: auto
-  reid_weights: osnet_x0_25_msmt17.pt
+  reid_weights: osnet_x1_0_msmt17.pt
   max_gap_s: 150.0
   max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
-  appearance_thresh: 0.45
+  appearance_thresh: 0.30
   max_speed_px_s: 400.0
   min_height_ratio: 0.6
   max_height_ratio: 1.7

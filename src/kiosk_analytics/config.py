@@ -25,6 +25,11 @@ class DetectorCfg:
     # (RT-DETR) can emit duplicate boxes for one person in crowds; the
     # duplicates spawn phantom tracks and cause ID churn. None = off.
     nms_iou: float | None = None
+    # Region of interest [x1, y1, x2, y2]: detect only inside this crop
+    # (coordinates mapped back to full frame). Upscaling the crop to imgsz
+    # raises effective resolution on the queue (fewer merged boxes) and
+    # removes irrelevant dining-area detections. None = full frame.
+    roi: list[int] | None = None
 
 
 @dataclass
