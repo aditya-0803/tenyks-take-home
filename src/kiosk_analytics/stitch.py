@@ -1,25 +1,37 @@
-"""Offline track stitching: re-link tracklet fragments into identities.
+"""Offline identity resolution: constrained agglomerative clustering of
+tracklets.
 
-The online tracker breaks a person's track when they are occluded or
-leave the frame. This pass treats re-linking as a GLOBAL assignment
-problem so that groups who leave and return together are resolved
-jointly rather than one at a time:
+The online tracker fragments each person into tracklets. Deciding which
+tracklets belong to the same person is formulated as CLUSTERING under
+hard physical constraints — not as successor matching. The previous
+successor-based formulation (each tracklet links to at most one
+follow-up) had a structural failure mode: a person fragmented into N
+pieces needed N-1 consecutive pairwise wins, and one weak intermediate
+fragment broke the chain even when a later fragment matched the first
+one almost perfectly.
 
-1. Each tracklet gets an appearance embedding: the L2-normalised mean of
-   re-ID embeddings over its best crops (large, confident detections).
-2. Candidate links (A -> B, where B starts after A ends) are gated by
-   hard constraints: temporal overlap is impossible, gap <= max_gap_s,
-   exit->entry displacement implies a plausible walking speed, and box
-   heights are similar.
-3. Surviving pairs form a cost matrix (cosine distance); the Hungarian
-   algorithm picks the globally optimal one-to-one linking, with a
-   per-link cost threshold acting as a "no match" option so new arrivals
-   are not force-matched to departed tracklets.
-4. Union-find merges accepted links; chains (A->B->C) emerge naturally.
+Formulation:
+- Each tracklet gets an appearance embedding (L2-normalised mean of
+  re-ID embeddings over its best crops, background masked out when
+  segmentation masks are available).
+- CANNOT-LINK constraints come from physics, not appearance:
+  * significant temporal overlap  -> provably different people
+    (brief overlap <= max_overlap_s is allowed: at an ID switch the
+    dying track coasts while its replacement starts);
+  * absence longer than max_gap_s -> treated as a different visit;
+  * implied walking speed between exit and re-entry too high;
+  * grossly different box heights.
+- Agglomerative merging: repeatedly merge the closest pair of clusters
+  (cosine distance between crop-count-weighted pooled embeddings) whose
+  members all satisfy pairwise constraints, until no pair is closer than
+  appearance_thresh. Pooling means every merge improves the cluster's
+  embedding, so late fragments of a person can join even if some
+  intermediate fragment was weak.
 
 Known failure mode (documented for the write-up): visually identical
-people who leave and return together may swap IDs. This keeps the count
-correct and typically produces small dwell error.
+people who leave and return together may swap identities. The count
+stays correct; the dwell error is bounded by the difference between
+their durations.
 """
 
 from __future__ import annotations
@@ -27,28 +39,25 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 
 from .config import StitchCfg
 from .tracklets import Tracklet, TrackletStore
 
 log = logging.getLogger(__name__)
 
-INF = 1e6
-
 
 # --------------------------------------------------------------------------
 # Appearance embeddings
 # --------------------------------------------------------------------------
 class CropEmbedder:
-    """Embeds person crops. Prefers a re-ID model (OSNet via boxmot); falls
-    back to torchvision ResNet-18 features if boxmot's re-ID stack is
-    unavailable."""
+    """Embeds person crops. Prefers a re-ID model (OSNet via boxmot); the
+    generic torchvision fallback is opt-in because non-re-ID features make
+    merges unreliable."""
 
     def __init__(
         self,
         backend: str = "auto",
-        reid_weights: str = "osnet_x0_25_msmt17.pt",
+        reid_weights: str = "osnet_x1_0_msmt17.pt",
         device: str = "cpu",
         allow_fallback: bool = False,
     ):
@@ -95,15 +104,14 @@ class CropEmbedder:
                     candidates.append(m.name)
         except Exception:  # noqa: BLE001
             pass
-        errors = []
         for name in candidates:
             try:
                 mod = importlib.import_module(name)
                 if hasattr(mod, "ReidAutoBackend"):
                     log.info("Using re-ID backend from %s", name)
                     return mod.ReidAutoBackend
-            except ImportError as e:
-                errors.append(f"{name}: {e}")
+            except ImportError:
+                continue
         raise ImportError(
             "ReidAutoBackend not found in boxmot; tried " + "; ".join(candidates)
         )
@@ -150,92 +158,113 @@ class CropEmbedder:
 
 
 # --------------------------------------------------------------------------
-# Gating and assignment (pure logic; unit-testable without torch)
+# Constraints and clustering (pure logic; unit-testable without torch)
 # --------------------------------------------------------------------------
-def link_cost(a: Tracklet, b: Tracklet, emb_a, emb_b, cfg: StitchCfg) -> float:
-    """Cost of linking tracklet A -> B (B is the same person reappearing).
-
-    Returns INF if any hard gate fails, else cosine distance between
-    appearance embeddings.
-    """
-    gap = b.start - a.end
-    # gap may be slightly negative: at an ID switch the dying track coasts
-    # a few frames while its replacement starts, so fragments of one person
-    # briefly coexist. Long overlap still means provably different people.
-    if gap < -cfg.max_overlap_s or gap > cfg.max_gap_s:
-        return INF
-    dist = float(np.linalg.norm(b.entry_point - a.exit_point))
-    if dist / max(gap, 0.5) > cfg.max_speed_px_s:
-        return INF
-    h_ratio = b.mean_height() / max(a.mean_height(), 1e-6)
+def pair_allowed(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> bool:
+    """May tracklets a and b belong to the same person? Hard physical
+    gates only; appearance is judged separately."""
+    earlier, later = (a, b) if a.start <= b.start else (b, a)
+    gap = later.start - earlier.end
+    if gap < -cfg.max_overlap_s:  # long coexistence: provably different people
+        return False
+    if gap > cfg.max_gap_s:
+        return False
+    if gap >= 0:
+        dist = float(np.linalg.norm(later.entry_point - earlier.exit_point))
+        if dist / max(gap, 0.5) > cfg.max_speed_px_s:
+            return False
+    h_ratio = later.mean_height() / max(earlier.mean_height(), 1e-6)
     if not (cfg.min_height_ratio <= h_ratio <= cfg.max_height_ratio):
-        return INF
-    if emb_a is None or emb_b is None:
-        return INF
-    return float(1.0 - np.dot(emb_a, emb_b))
+        return False
+    return True
 
 
-def assign_links(
+def _cosine_dist(u: np.ndarray, v: np.ndarray) -> float:
+    return float(1.0 - np.dot(u, v))
+
+
+def cluster_tracklets(
     tracklets: list[Tracklet],
     embeddings: dict[int, np.ndarray | None],
+    weights: dict[int, int],
     cfg: StitchCfg,
-) -> tuple[list[tuple[int, int]], list[dict]]:
-    """Globally optimal set of (tid_a -> tid_b) links via Hungarian matching.
+) -> tuple[list[set[int]], dict]:
+    """Constrained agglomerative clustering.
 
-    Every tracklet may have at most one successor and one predecessor;
-    links costing more than appearance_thresh are rejected (no-match).
-
-    Also returns the gated candidate list (with costs) for debugging:
-    inspecting these costs is how the appearance threshold gets tuned.
+    Returns (clusters as sets of tids, debug info). Clusters merge
+    greedily by smallest cosine distance between pooled embeddings,
+    subject to every cross-pair of members passing pair_allowed, until
+    no admissible pair is closer than appearance_thresh.
     """
-    n = len(tracklets)
-    if n < 2:
-        return [], []
-    cost = np.full((n, n), INF)
-    candidates = []
+    idx = {tr.tid: tr for tr in tracklets}
+    allowed_cache: dict[tuple[int, int], bool] = {}
+
+    def allowed(t1: int, t2: int) -> bool:
+        key = (min(t1, t2), max(t1, t2))
+        if key not in allowed_cache:
+            allowed_cache[key] = pair_allowed(idx[t1], idx[t2], cfg)
+        return allowed_cache[key]
+
+    clusters: list[dict] = [
+        {
+            "members": {tr.tid},
+            "emb": embeddings.get(tr.tid),
+            "w": max(weights.get(tr.tid, 1), 1),
+        }
+        for tr in tracklets
+    ]
+
+    debug_pairs = []
     for i, a in enumerate(tracklets):
-        for j, b in enumerate(tracklets):
-            if i != j:
-                c = link_cost(a, b, embeddings.get(a.tid), embeddings.get(b.tid), cfg)
-                cost[i, j] = c
-                if c < INF:
-                    candidates.append(
-                        {
-                            "from_tid": a.tid, "to_tid": b.tid,
-                            "cost": round(float(c), 4),
-                            "gap_s": round(b.start - a.end, 1),
-                            "accepted": False,
-                        }
-                    )
-    # Pad with a no-match block so every row can opt out at threshold cost.
-    padded = np.full((n, 2 * n), cfg.appearance_thresh, dtype=np.float64)
-    padded[:, :n] = cost
-    rows, cols = linear_sum_assignment(padded)
-    links = []
-    accepted = set()
-    for r, c in zip(rows, cols):
-        if c < n and cost[r, c] < cfg.appearance_thresh:
-            links.append((tracklets[r].tid, tracklets[c].tid))
-            accepted.add((tracklets[r].tid, tracklets[c].tid))
-    for cand in candidates:
-        cand["accepted"] = (cand["from_tid"], cand["to_tid"]) in accepted
-    return links, candidates
+        for b in tracklets[i + 1:]:
+            ea, eb = embeddings.get(a.tid), embeddings.get(b.tid)
+            if ea is None or eb is None or not allowed(a.tid, b.tid):
+                continue
+            d = _cosine_dist(ea, eb)
+            if d < 0.6:  # keep the debug file readable
+                debug_pairs.append(
+                    {"tid_a": a.tid, "tid_b": b.tid, "cost": round(d, 4)}
+                )
 
+    merges = []
+    while True:
+        best = None
+        for i in range(len(clusters)):
+            ci = clusters[i]
+            if ci["emb"] is None:
+                continue
+            for j in range(i + 1, len(clusters)):
+                cj = clusters[j]
+                if cj["emb"] is None:
+                    continue
+                d = _cosine_dist(ci["emb"], cj["emb"])
+                if d >= cfg.appearance_thresh:
+                    continue
+                if best is not None and d >= best[0]:
+                    continue
+                if all(
+                    allowed(t1, t2) for t1 in ci["members"] for t2 in cj["members"]
+                ):
+                    best = (d, i, j)
+        if best is None:
+            break
+        d, i, j = best
+        ci, cj = clusters[i], clusters[j]
+        merges.append(
+            {
+                "cost": round(d, 4),
+                "into": sorted(ci["members"]),
+                "absorbed": sorted(cj["members"]),
+            }
+        )
+        pooled = ci["emb"] * ci["w"] + cj["emb"] * cj["w"]
+        ci["emb"] = pooled / (np.linalg.norm(pooled) + 1e-9)
+        ci["w"] += cj["w"]
+        ci["members"] |= cj["members"]
+        del clusters[j]
 
-class _UnionFind:
-    def __init__(self, items):
-        self.parent = {x: x for x in items}
-
-    def find(self, x):
-        while self.parent[x] != x:
-            self.parent[x] = self.parent[self.parent[x]]
-            x = self.parent[x]
-        return x
-
-    def union(self, a, b):
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            self.parent[rb] = ra
+    debug = {"candidates": debug_pairs, "merges": merges}
+    return [c["members"] for c in clusters], debug
 
 
 def stitch_tracklets(
@@ -244,12 +273,9 @@ def stitch_tracklets(
     """Returns (mapping tracker_id -> person_id, debug info).
 
     person_ids are 1-based, ordered by first appearance. With stitching
-    disabled or nothing to merge the mapping is a relabelling of tracker
-    IDs. Debug info records the embedding backend and every gated
-    candidate link with its cost — the raw material for threshold tuning."""
+    disabled the mapping is a relabelling of tracker IDs."""
     tracklets = store.by_start_time()
-    tids = [tr.tid for tr in tracklets]
-    debug: dict = {"backend": None, "n_tracklets": len(tracklets), "candidates": [], "links": []}
+    debug: dict = {"backend": None, "n_tracklets": len(tracklets)}
     if cfg.enabled and len(tracklets) > 1:
         embedder = CropEmbedder(cfg.backend, cfg.reid_weights, device, cfg.allow_fallback)
         debug["backend"] = embedder.kind
@@ -257,28 +283,33 @@ def stitch_tracklets(
             log.warning(
                 "STITCHING IS USING THE %s FALLBACK, NOT A RE-ID MODEL. "
                 "appearance_thresh=%.2f was tuned for OSNet cosine distances "
-                "and is likely meaningless here — expect both missed and "
-                "spurious merges.", embedder.kind.upper(), cfg.appearance_thresh,
+                "and is likely meaningless here.", embedder.kind.upper(),
+                cfg.appearance_thresh,
             )
-        embeddings = {
-            tr.tid: embedder.embed_crops(tr.best_crops(cfg.crops_per_track))
-            for tr in tracklets
-        }
-        debug["tracklets_without_embedding"] = [t for t, e in embeddings.items() if e is None]
-        links, candidates = assign_links(tracklets, embeddings, cfg)
-        debug["candidates"] = candidates
-        debug["links"] = [{"from_tid": a, "to_tid": b} for a, b in links]
-        log.info("Stitching merged %d links across %d tracklets", len(links), len(tracklets))
+        crops = {tr.tid: tr.best_crops(cfg.crops_per_track) for tr in tracklets}
+        embeddings = {tid: embedder.embed_crops(c) for tid, c in crops.items()}
+        weights = {tid: len(c) for tid, c in crops.items()}
+        debug["tracklets_without_embedding"] = sorted(
+            t for t, e in embeddings.items() if e is None
+        )
+        clusters, cluster_debug = cluster_tracklets(tracklets, embeddings, weights, cfg)
+        debug.update(cluster_debug)
+        n_merged = sum(len(c) - 1 for c in clusters)
+        log.info(
+            "Clustering: %d tracklets -> %d identities (%d merges)",
+            len(tracklets), len(clusters), n_merged,
+        )
     else:
-        links = []
-    uf = _UnionFind(tids)
-    for a, b in links:
-        uf.union(a, b)
-    # Renumber roots by first appearance.
-    root_first_seen: dict[int, float] = {}
-    for tr in tracklets:
-        root = uf.find(tr.tid)
-        root_first_seen.setdefault(root, tr.start)
-    ordered_roots = sorted(root_first_seen, key=root_first_seen.get)
-    root_to_pid = {root: i + 1 for i, root in enumerate(ordered_roots)}
-    return {tid: root_to_pid[uf.find(tid)] for tid in tids}, debug
+        clusters = [{tr.tid} for tr in tracklets]
+
+    # Renumber clusters by first appearance.
+    first_seen = {
+        frozenset(c): min(store.tracklets[t].start for t in c) for c in clusters
+    }
+    ordered = sorted(first_seen, key=first_seen.get)
+    mapping: dict[int, int] = {}
+    for pid, members in enumerate(ordered, start=1):
+        for tid in members:
+            mapping[tid] = pid
+    debug["tid_to_pid"] = {str(t): p for t, p in sorted(mapping.items())}
+    return mapping, debug

@@ -50,12 +50,14 @@ def run_pipeline(
     # ---- pass 1: detect + track -------------------------------------------
     n_processed = 0
     for sample in reader:
-        dets = detector(sample.image)
+        dets, masks = detector(sample.image)
         tracks = tracker.update(dets, sample.image)
-        for x1, y1, x2, y2, tid, conf in tracks:
+        for x1, y1, x2, y2, tid, conf, det_ind in tracks:
+            di = int(det_ind)
+            mask = masks[di] if masks is not None and 0 <= di < len(masks) else None
             store.add_observation(
                 int(tid), sample.index, sample.t,
-                np.array([x1, y1, x2, y2]), float(conf), sample.image,
+                np.array([x1, y1, x2, y2]), float(conf), sample.image, mask=mask,
             )
         n_processed += 1
         if n_processed % 500 == 0:
@@ -92,7 +94,7 @@ def run_pipeline(
     summary["runtime_s"] = round(time.time() - t0, 1)
     summary["raw_tracklets"] = len(store)
     summary["stitch_backend"] = stitch_debug.get("backend")
-    summary["stitch_links"] = len(stitch_debug.get("links", []))
+    summary["stitch_merges"] = len(stitch_debug.get("merges", []))
 
     results_df = pd.DataFrame([asdict(r) for r in results]).sort_values("pid")
     results_df.to_csv(out_dir / "persons.csv", index=False)

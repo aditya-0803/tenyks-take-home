@@ -15,7 +15,9 @@ video:
                           # and persistence windows assume ~30 fps); 15 is the compromise
 
 detector:
-  model: yolo11m.pt       # any ultralytics-loadable weights (yolo11*, rtdetr-l.pt, ...)
+  model: yolo11m-seg.pt   # seg variant: masks purify re-ID crops (neighbour
+                          # pixels zeroed). Any ultralytics weights work;
+                          # non-seg models simply run without masks.
   conf: 0.3
   iou: 0.7
   imgsz: 1280

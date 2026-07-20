@@ -78,11 +78,19 @@ class Tracker:
         return accepted
 
     def update(self, dets: np.ndarray, frame: np.ndarray) -> np.ndarray:
+        """Returns (M, 7): x1, y1, x2, y2, track_id, conf, det_ind.
+
+        det_ind maps each track back to its row in the input detections
+        (needed to associate segmentation masks with tracks); -1 when the
+        installed tracker does not report it."""
         if dets.size == 0:
             dets = np.empty((0, 6), dtype=np.float32)
         out = self.impl.update(dets, frame)
         if out is None or len(out) == 0:
-            return np.empty((0, 6), dtype=np.float32)
+            return np.empty((0, 7), dtype=np.float32)
         out = np.asarray(out, dtype=np.float32)
         # boxmot returns [x1, y1, x2, y2, id, conf, cls, det_ind]
-        return out[:, :6]
+        if out.shape[1] >= 8:
+            return out[:, [0, 1, 2, 3, 4, 5, 7]]
+        pad = np.full((len(out), 1), -1, dtype=np.float32)
+        return np.hstack([out[:, :6], pad])

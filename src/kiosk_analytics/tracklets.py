@@ -27,11 +27,21 @@ class Tracklet:
         self.boxes.append(box.astype(np.float32))
         self.confs.append(float(conf))
 
-    def add_crop_candidate(self, frame: np.ndarray, box: np.ndarray, conf: float, t: float) -> None:
+    def add_crop_candidate(
+        self,
+        frame: np.ndarray,
+        box: np.ndarray,
+        conf: float,
+        t: float,
+        mask: np.ndarray | None = None,
+    ) -> None:
         """Keep the highest-quality crop per one-second bin of the track.
 
         Quality = detection confidence * sqrt(box area): prefers large,
-        confident (unoccluded) views of the person.
+        confident (unoccluded) views of the person. When a segmentation
+        mask is provided, background/neighbour pixels are zeroed so the
+        re-ID embedding sees only this person (critical in queues, where
+        a box routinely contains half of the adjacent person).
         """
         x1, y1, x2, y2 = (int(round(v)) for v in box)
         x1, y1 = max(x1, 0), max(y1, 0)
@@ -42,8 +52,10 @@ class Tracklet:
         bin_idx = int(t / CROP_BIN_S)
         prev = self._crops.get(bin_idx)
         if prev is None or score > prev[0]:
-            crop = cv2.resize(frame[y1:y2, x1:x2], CROP_SIZE)
-            self._crops[bin_idx] = (score, crop)
+            crop = frame[y1:y2, x1:x2]
+            if mask is not None:
+                crop = crop * mask[y1:y2, x1:x2, None].astype(crop.dtype)
+            self._crops[bin_idx] = (score, cv2.resize(crop, CROP_SIZE))
 
     def best_crops(self, k: int) -> list[np.ndarray]:
         ranked = sorted(self._crops.values(), key=lambda sc: -sc[0])
@@ -90,12 +102,13 @@ class TrackletStore:
         box: np.ndarray,
         conf: float,
         frame: np.ndarray,
+        mask: np.ndarray | None = None,
     ) -> None:
         tr = self.tracklets.get(tid)
         if tr is None:
             tr = self.tracklets[tid] = Tracklet(tid)
         tr.add(frame_idx, t, box, conf)
-        tr.add_crop_candidate(frame, box, conf, t)
+        tr.add_crop_candidate(frame, box, conf, t, mask=mask)
 
     def __len__(self) -> int:
         return len(self.tracklets)
