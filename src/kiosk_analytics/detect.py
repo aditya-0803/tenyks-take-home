@@ -89,6 +89,13 @@ class PersonDetector:
             dets = dets[keep]
             if masks is not None:
                 masks = [masks[i] for i in keep]
+        if self.cfg.max_wh_ratio is not None and len(dets) > 0:
+            w = dets[:, 2] - dets[:, 0]
+            h = np.maximum(dets[:, 3] - dets[:, 1], 1e-6)
+            keep = np.where(w / h <= self.cfg.max_wh_ratio)[0].tolist()
+            dets = dets[keep]
+            if masks is not None:
+                masks = [masks[i] for i in keep]
         return dets, masks
 
 

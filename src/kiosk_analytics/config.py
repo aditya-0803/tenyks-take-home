@@ -30,6 +30,12 @@ class DetectorCfg:
     # full-body box) survive plain NMS and spawn parallel phantom tracks
     # that poison identity clustering. None = off.
     containment_iom: float | None = 0.8
+    # Veto implausibly WIDE detections (width/height above this): a box
+    # that swallows two adjacent people is much wider than any single
+    # standing person. During the 1-2s of a crossing there is simply no
+    # detection; both tracks coast and re-lock on separation, preventing
+    # ID theft at the source. None = off.
+    max_wh_ratio: float | None = None
     # Region of interest [x1, y1, x2, y2]: detect only inside this crop
     # (coordinates mapped back to full frame). Upscaling the crop to imgsz
     # raises effective resolution on the queue (fewer merged boxes) and

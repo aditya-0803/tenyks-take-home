@@ -17,6 +17,20 @@ def test_torso_box_inside_body_box_suppressed():
     assert _suppress_contained(boxes, scores, iom_thresh=0.8) == [0]
 
 
+def test_wide_box_veto_logic():
+    """A merged two-person box (w/h ~0.8) is vetoed; single people and the
+    toddler (w/h ~0.5-0.6) survive."""
+    boxes = np.array([
+        [100, 100, 180, 300],   # adult: 80/200 = 0.40
+        [400, 200, 460, 300],   # child: 60/100 = 0.60
+        [600, 100, 930, 500],   # merged pair: 330/400 = 0.83
+    ], dtype=float)
+    w = boxes[:, 2] - boxes[:, 0]
+    h = boxes[:, 3] - boxes[:, 1]
+    keep = (w / h <= 0.7)
+    assert keep.tolist() == [True, True, False]
+
+
 def test_adjacent_people_not_suppressed():
     a = [100, 100, 180, 300]
     b = [170, 105, 250, 305]  # neighbour, slight overlap

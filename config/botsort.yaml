@@ -1,3 +1,8 @@
+# A/B experiment: BoT-SORT (appearance-aware) online tracker.
+# Everything except the tracker matches config/default.yaml, so
+# differences in tracklet counts / ID stability are attributable to
+# the association method alone.
+
 # Kiosk analytics pipeline configuration.
 # All time units are seconds, all coordinates are pixels in the source video.
 
@@ -36,11 +41,14 @@ detector:
                             # two people is ~0.8). Prevents ID theft at source
 
 tracker:
-  type: bytetrack         # bytetrack | botsort | ocsort (via boxmot)
-  reid_weights: osnet_x1_0_msmt17.pt   # used by botsort only
+  type: botsort           # A/B arm: appearance-aware online association --
+                          # candidate fix for ID churn in crowded scenes
+                          # (ByteTrack is motion-only and guesses when boxes
+                          # overlap heavily). ~1.5x runtime.
+  reid_weights: osnet_x1_0_msmt17.pt
   params:                 # filtered against the installed boxmot signature
-    frame_rate: 15        # match video.target_fps, not the 30fps default
-    track_buffer: 90      # keep lost tracks alive ~6s before dropping
+    frame_rate: 15
+    track_buffer: 90
 
 stitch:
   enabled: true

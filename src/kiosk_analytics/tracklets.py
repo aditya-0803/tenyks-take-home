@@ -49,6 +49,7 @@ class Tracklet:
         conf: float,
         t: float,
         mask: np.ndarray | None = None,
+        contaminated: bool = False,
     ) -> None:
         """Keep the highest-quality crop per one-second bin of the track.
 
@@ -57,7 +58,15 @@ class Tracklet:
         mask is provided, background/neighbour pixels are zeroed so the
         re-ID embedding sees only this person (critical in queues, where
         a box routinely contains half of the adjacent person).
+
+        Frames flagged `contaminated` (box overlapping another detection)
+        are never harvested: crops containing pieces of two people poison
+        embeddings, seed wrong merges, and blunt chimera detection. A
+        tracklet with zero clean frames ends up with no embedding and
+        safely stays a singleton.
         """
+        if contaminated:
+            return
         x1, y1, x2, y2 = (int(round(v)) for v in box)
         x1, y1 = max(x1, 0), max(y1, 0)
         x2, y2 = min(x2, frame.shape[1]), min(y2, frame.shape[0])
@@ -155,12 +164,13 @@ class TrackletStore:
         conf: float,
         frame: np.ndarray,
         mask: np.ndarray | None = None,
+        contaminated: bool = False,
     ) -> None:
         tr = self.tracklets.get(tid)
         if tr is None:
             tr = self.tracklets[tid] = Tracklet(tid)
         tr.add(frame_idx, t, box, conf)
-        tr.add_crop_candidate(frame, box, conf, t, mask=mask)
+        tr.add_crop_candidate(frame, box, conf, t, mask=mask, contaminated=contaminated)
 
     def __len__(self) -> int:
         return len(self.tracklets)

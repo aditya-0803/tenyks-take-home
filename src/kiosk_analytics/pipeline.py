@@ -51,13 +51,16 @@ def run_pipeline(
     n_processed = 0
     for sample in reader:
         dets, masks = detector(sample.image)
+        contaminated = _contamination_flags(dets)
         tracks = tracker.update(dets, sample.image)
         for x1, y1, x2, y2, tid, conf, det_ind in tracks:
             di = int(det_ind)
             mask = masks[di] if masks is not None and 0 <= di < len(masks) else None
+            dirty = bool(contaminated[di]) if 0 <= di < len(contaminated) else True
             store.add_observation(
                 int(tid), sample.index, sample.t,
-                np.array([x1, y1, x2, y2]), float(conf), sample.image, mask=mask,
+                np.array([x1, y1, x2, y2]), float(conf), sample.image,
+                mask=mask, contaminated=dirty,
             )
         n_processed += 1
         if n_processed % 500 == 0:
@@ -117,6 +120,33 @@ def run_pipeline(
 
     log.info("Summary: %s", json.dumps(summary, indent=2, default=str))
     return summary
+
+
+def _contamination_flags(dets: np.ndarray, iom_thresh: float = 0.2) -> np.ndarray:
+    """Flag detections whose box materially overlaps another detection
+    (intersection / own-area > iom_thresh). Crops from such frames contain
+    pieces of two people (segmentation masks bleed at boundaries), so they
+    are excluded from re-ID crop harvesting."""
+    n = len(dets)
+    flags = np.zeros(n, dtype=bool)
+    if n < 2:
+        return flags
+    for i in range(n):
+        x1, y1, x2, y2 = dets[i, :4]
+        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        if area <= 0:
+            flags[i] = True
+            continue
+        for j in range(n):
+            if i == j:
+                continue
+            xx1, yy1 = max(x1, dets[j, 0]), max(y1, dets[j, 1])
+            xx2, yy2 = min(x2, dets[j, 2]), min(y2, dets[j, 3])
+            inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+            if inter / area > iom_thresh:
+                flags[i] = True
+                break
+    return flags
 
 
 def _dump_stitch_debug(out_dir: Path, store, tid_to_pid: dict, debug: dict) -> None:
