@@ -160,23 +160,30 @@ class CropEmbedder:
 # --------------------------------------------------------------------------
 # Constraints and clustering (pure logic; unit-testable without torch)
 # --------------------------------------------------------------------------
-def pair_allowed(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> bool:
-    """May tracklets a and b belong to the same person? Hard physical
-    gates only; appearance is judged separately."""
+def pair_block_reason(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> str | None:
+    """Why tracklets a and b may NOT belong to the same person, or None if
+    the pair passes all hard physical gates. Appearance is judged
+    separately; recording the blocking gate in the debug output is what
+    lets us distinguish 'embeddings failed' from 'physics forbade it'."""
     earlier, later = (a, b) if a.start <= b.start else (b, a)
     gap = later.start - earlier.end
     if gap < -cfg.max_overlap_s:  # long coexistence: provably different people
-        return False
+        return f"overlap {-gap:.1f}s"
     if gap > cfg.max_gap_s:
-        return False
+        return f"gap {gap:.1f}s"
     if gap >= 0:
         dist = float(np.linalg.norm(later.entry_point - earlier.exit_point))
-        if dist / max(gap, 0.5) > cfg.max_speed_px_s:
-            return False
+        speed = dist / max(gap, 0.5)
+        if speed > cfg.max_speed_px_s:
+            return f"speed {speed:.0f}px/s"
     h_ratio = later.mean_height() / max(earlier.mean_height(), 1e-6)
     if not (cfg.min_height_ratio <= h_ratio <= cfg.max_height_ratio):
-        return False
-    return True
+        return f"height_ratio {h_ratio:.2f}"
+    return None
+
+
+def pair_allowed(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> bool:
+    return pair_block_reason(a, b, cfg) is None
 
 
 def _cosine_dist(u: np.ndarray, v: np.ndarray) -> float:
@@ -218,13 +225,19 @@ def cluster_tracklets(
     for i, a in enumerate(tracklets):
         for b in tracklets[i + 1:]:
             ea, eb = embeddings.get(a.tid), embeddings.get(b.tid)
-            if ea is None or eb is None or not allowed(a.tid, b.tid):
+            if ea is None or eb is None:
                 continue
             d = _cosine_dist(ea, eb)
-            if d < 0.6:  # keep the debug file readable
-                debug_pairs.append(
-                    {"tid_a": a.tid, "tid_b": b.tid, "cost": round(d, 4)}
-                )
+            if d >= 0.6:  # keep the debug file readable
+                continue
+            entry = {"tid_a": a.tid, "tid_b": b.tid, "cost": round(d, 4)}
+            reason = pair_block_reason(idx[a.tid], idx[b.tid], cfg)
+            if reason is not None:
+                # Appearance says "maybe same person" but physics forbids
+                # the merge — exactly the entries to inspect when an ID
+                # visibly splits after an occlusion.
+                entry["blocked_by"] = reason
+            debug_pairs.append(entry)
 
     merges = []
     while True:
