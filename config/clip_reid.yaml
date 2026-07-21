@@ -1,0 +1,72 @@
+# Experiment arm: CLIP-ReID embeddings for stitching (detector/tracker
+# identical to default.yaml -- differences in stitch costs are
+# attributable purely to the embedder).
+
+# Kiosk analytics pipeline configuration.
+# All time units are seconds, all coordinates are pixels in the source video.
+
+# Polygon (customer side of the kiosks + queue corridor), drawn on a 1280x720
+# reference frame by hand (Adi, 2026-07-16). Canonical zone for all experiments.
+zone_polygon:
+  - [406, 701]
+  - [429, 715]
+  - [1007, 714]
+  - [1022, 396]
+  - [695, 345]
+
+video:
+  target_fps: 15.0        # tracker association degrades at low fps (motion gates
+                          # and persistence windows assume ~30 fps); 15 is the compromise
+
+detector:
+  model: yolo11m-seg.pt   # seg variant: masks purify re-ID crops (neighbour
+                          # pixels zeroed). Any ultralytics weights work;
+                          # non-seg models simply run without masks.
+  conf: 0.3
+  iou: 0.7
+  imgsz: 1280
+  device: auto              # auto | cuda:0 | cpu | mps
+  roi: [350, 80, 1150, 720] # detect only around the kiosk area, upscaled to
+                            # imgsz: ~2x effective resolution on the queue,
+                            # no dining-area tracklets
+
+tracker:
+  type: bytetrack         # bytetrack | botsort | ocsort (via boxmot)
+  reid_weights: osnet_x1_0_msmt17.pt   # used by botsort only
+  params:                 # filtered against the installed boxmot signature
+    frame_rate: 15        # match video.target_fps, not the 30fps default
+    track_buffer: 90      # keep lost tracks alive ~6s before dropping
+
+stitch:
+  enabled: true
+  backend: auto           # auto -> boxmot OSNet, falls back to torchvision resnet18
+  reid_weights: clip_market1501.pt  # CLIP-ReID; distances NOT comparable to
+                                    # OSNet's -- tune appearance_thresh from
+                                    # this backend's own stitch_debug costs
+  max_gap_s: 150.0        # max absence before we refuse to re-link a track
+  max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
+  appearance_thresh: 0.30 # PLACEHOLDER for CLIP space -- inspect stitch_debug
+                          # candidates/merges on first run, then set to the gap
+                          # between same-person and different-person clusters
+  max_speed_px_s: 400.0   # exit->entry displacement plausibility gate
+  min_height_ratio: 0.6   # box-height similarity gate between linked tracks
+  max_height_ratio: 1.7
+  crops_per_track: 8      # best crops kept per tracklet for embedding
+  save_debug: true        # write stitch_debug.json + crops/ montages
+  allow_fallback: false   # fail loudly rather than stitch with non-re-ID features
+
+analytics:
+  membership: hybrid       # hybrid | bottom_strip | anchor
+  strip_frac: 0.25         # bottom fraction of the box tested against the zone mask
+  min_overlap: 0.5         # required in-zone fraction of that strip
+  box_overlap: 0.35        # hybrid: whole-box in-zone fraction that also counts
+  anchor: bottom_center    # only used when membership: anchor
+  hysteresis_samples: 3   # consecutive samples required to flip in/out state
+  merge_gap_s: 3.0        # in-zone segments closer than this are merged
+  min_engagement_s: 8.0   # total dwell below this => walk-through, not counted
+  min_track_len_s: 1.0    # discard tracks shorter than this (detector noise)
+
+viz:
+  enabled: true
+  show_zone: true
+  show_out_of_zone: false # hide boxes for people outside the kiosk zone
