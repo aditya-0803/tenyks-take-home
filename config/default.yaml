@@ -18,7 +18,10 @@ detector:
   model: yolo11m-seg.pt   # seg variant: masks purify re-ID crops (neighbour
                           # pixels zeroed). Any ultralytics weights work;
                           # non-seg models simply run without masks.
-  conf: 0.3
+  conf: 0.15              # low floor on purpose: ByteTrack's second stage
+                          # uses low-conf detections to hold tracks through
+                          # occlusion (its signature trick); a high floor
+                          # starves it and causes ID churn at crossings
   iou: 0.7
   imgsz: 1280
   device: auto              # auto | cuda:0 | cpu | mps
@@ -39,8 +42,9 @@ stitch:
   reid_weights: osnet_x1_0_msmt17.pt
   max_gap_s: 150.0        # max absence before we refuse to re-link a track
   max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
-  appearance_thresh: 0.30 # max cosine distance for a merge; from stitch_debug
-                          # on this footage: same person ~0.20, different ~0.33+
+  appearance_thresh: 0.26 # max cosine distance for a merge. OSNet on this
+                          # footage: true merges <= 0.24, suspect pair at
+                          # 0.294 -- threshold sits in the gap
   max_speed_px_s: 400.0   # exit->entry displacement plausibility gate
   min_height_ratio: 0.6   # box-height similarity gate between linked tracks
   max_height_ratio: 1.7
