@@ -36,9 +36,27 @@ def test_long_overlap_forbidden():
 
 
 def test_brief_overlap_from_id_switch_allowed():
-    a = make_tracklet(1, 0, 50.0)
-    b = make_tracklet(2, 49.5, 90)  # 0.5s < max_overlap_s
+    """Coasting duplicate: same place during the overlap -> mergeable."""
+    a = make_tracklet(1, 0, 50.0, x=500, n=101)
+    b = make_tracklet(2, 49.5, 90, x=505, n=82)  # 0.5s overlap, coincident
     assert pair_allowed(a, b, CFG)
+
+
+def test_overlapping_people_apart_stay_split():
+    """Two REAL people whose fragments overlap briefly stand apart during
+    the overlap -> merge forbidden even with identical appearance. (The
+    two-people-one-ID regression from raising max_overlap_s.)"""
+    cfg = StitchCfg(
+        max_gap_s=100.0, max_overlap_s=5.0,
+        appearance_thresh=0.3, max_speed_px_s=400.0, overlap_max_dist_px=120.0,
+    )
+    a = make_tracklet(1, 0, 52, x=500, n=105)     # woman at kiosk
+    b = make_tracklet(2, 49, 90, x=900, n=83)     # man walking, 3s overlap
+    assert not pair_allowed(a, b, cfg)
+    e = unit([1, 0, 0])
+    weights = {1: 5, 2: 5}
+    clusters, _ = cluster_tracklets([a, b], {1: e, 2: e}, weights, cfg)
+    assert {frozenset(c) for c in clusters} == {frozenset({1}), frozenset({2})}
 
 
 def test_gap_and_speed_gates():

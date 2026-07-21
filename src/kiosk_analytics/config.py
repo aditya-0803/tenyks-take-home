@@ -54,6 +54,10 @@ class StitchCfg:
     # switch the dying track coasts a few frames while its replacement
     # starts, so the two fragments of one person briefly coexist.
     max_overlap_s: float = 1.0
+    # Overlapping tracklets may only merge if they are in the same PLACE
+    # during the overlap (coasting duplicate of one person). Two real
+    # people whose fragments overlap briefly stand apart and stay split.
+    overlap_max_dist_px: float = 120.0
     appearance_thresh: float = 0.45
     max_speed_px_s: float = 400.0
     min_height_ratio: float = 0.6

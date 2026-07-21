@@ -176,6 +176,12 @@ def pair_block_reason(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> str | None:
         speed = dist / max(gap, 0.5)
         if speed > cfg.max_speed_px_s:
             return f"speed {speed:.0f}px/s"
+    else:
+        # Tolerated overlap: only a coasting duplicate of ONE person, which
+        # coincides spatially. Two real people overlapping briefly do not.
+        d = _overlap_mean_dist(earlier, later)
+        if d is not None and d > cfg.overlap_max_dist_px:
+            return f"overlap_apart {d:.0f}px"
     h_ratio = later.robust_height() / max(earlier.robust_height(), 1e-6)
     if not (cfg.min_height_ratio <= h_ratio <= cfg.max_height_ratio):
         return f"height_ratio {h_ratio:.2f}"
@@ -184,6 +190,29 @@ def pair_block_reason(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> str | None:
 
 def pair_allowed(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> bool:
     return pair_block_reason(a, b, cfg) is None
+
+
+def _overlap_mean_dist(earlier: Tracklet, later: Tracklet) -> float | None:
+    """Mean distance between the two tracklets' box centres during their
+    temporal overlap window; None if either has no samples there."""
+    t0, t1 = later.start, min(earlier.end, later.end)
+    e_pts = [
+        ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, t)
+        for t, b in zip(earlier.times, earlier.boxes)
+        if t0 <= t <= t1
+    ]
+    l_pts = [
+        ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, t)
+        for t, b in zip(later.times, later.boxes)
+        if t0 <= t <= t1
+    ]
+    if not e_pts or not l_pts:
+        return None
+    dists = []
+    for lx, ly, lt in l_pts:
+        ex, ey, _ = min(e_pts, key=lambda p: abs(p[2] - lt))  # nearest in time
+        dists.append(np.hypot(lx - ex, ly - ey))
+    return float(np.mean(dists))
 
 
 def _cosine_dist(u: np.ndarray, v: np.ndarray) -> float:
@@ -288,7 +317,20 @@ def stitch_tracklets(
     person_ids are 1-based, ordered by first appearance. With stitching
     disabled the mapping is a relabelling of tracker IDs."""
     tracklets = store.by_start_time()
-    debug: dict = {"backend": None, "n_tracklets": len(tracklets)}
+    debug: dict = {
+        "backend": None,
+        "n_tracklets": len(tracklets),
+        "tracklets": [
+            {
+                "tid": tr.tid,
+                "start": round(tr.start, 1),
+                "end": round(tr.end, 1),
+                "robust_height": round(tr.robust_height(), 1),
+                "n_crops": len(tr.best_crops(cfg.crops_per_track)),
+            }
+            for tr in tracklets
+        ],
+    }
     if cfg.enabled and len(tracklets) > 1:
         embedder = CropEmbedder(cfg.backend, cfg.reid_weights, device, cfg.allow_fallback)
         debug["backend"] = embedder.kind

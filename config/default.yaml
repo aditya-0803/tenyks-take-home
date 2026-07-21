@@ -47,6 +47,9 @@ stitch:
   max_overlap_s: 5.0      # dying track can coast alongside its replacement at
                           # occlusions (3.9s observed); genuine co-queuers coexist
                           # for minutes, so 5s is still safely below ambiguity
+  overlap_max_dist_px: 120 # overlapping fragments must COINCIDE spatially to
+                          # merge (coasting duplicate); two real people whose
+                          # fragments overlap briefly stand apart -> stay split
   appearance_thresh: 0.26 # max cosine distance for a merge. OSNet on this
                           # footage: true merges <= 0.24, suspect pair at
                           # 0.294 -- threshold sits in the gap

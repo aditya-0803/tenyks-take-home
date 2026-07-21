@@ -11,6 +11,21 @@ CROP_SIZE = (128, 256)  # (w, h) fed to the re-ID embedder
 CROP_BIN_S = 1.0        # keep at most one candidate crop per second of track
 
 
+def _letterbox(crop: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Resize preserving aspect ratio, padding with black. A stretched
+    torso-only crop (feet occluded by the kiosk) otherwise distorts the
+    re-ID embedding and inflates same-person distances."""
+    w, h = size
+    ch, cw = crop.shape[:2]
+    scale = min(w / cw, h / ch)
+    nw, nh = max(int(cw * scale), 1), max(int(ch * scale), 1)
+    resized = cv2.resize(crop, (nw, nh))
+    canvas = np.zeros((h, w, 3), dtype=crop.dtype)
+    x0, y0 = (w - nw) // 2, (h - nh) // 2
+    canvas[y0:y0 + nh, x0:x0 + nw] = resized
+    return canvas
+
+
 @dataclass
 class Tracklet:
     tid: int
@@ -55,7 +70,7 @@ class Tracklet:
             crop = frame[y1:y2, x1:x2]
             if mask is not None:
                 crop = crop * mask[y1:y2, x1:x2, None].astype(crop.dtype)
-            self._crops[bin_idx] = (score, cv2.resize(crop, CROP_SIZE))
+            self._crops[bin_idx] = (score, _letterbox(crop, CROP_SIZE))
 
     def best_crops(self, k: int) -> list[np.ndarray]:
         ranked = sorted(self._crops.values(), key=lambda sc: -sc[0])
