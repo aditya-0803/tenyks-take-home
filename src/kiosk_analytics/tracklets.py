@@ -89,6 +89,13 @@ class Tracklet:
         hs = [b[3] - b[1] for b in self.boxes[-n:]]
         return float(np.mean(hs))
 
+    def robust_height(self) -> float:
+        """75th-percentile box height over the whole tracklet: measures the
+        person's true size even when many frames are occlusion-clipped
+        (endpoint heights are corrupted exactly when tracks break)."""
+        hs = [b[3] - b[1] for b in self.boxes]
+        return float(np.percentile(hs, 75))
+
 
 class TrackletStore:
     def __init__(self):

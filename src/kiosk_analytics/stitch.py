@@ -176,7 +176,7 @@ def pair_block_reason(a: Tracklet, b: Tracklet, cfg: StitchCfg) -> str | None:
         speed = dist / max(gap, 0.5)
         if speed > cfg.max_speed_px_s:
             return f"speed {speed:.0f}px/s"
-    h_ratio = later.mean_height() / max(earlier.mean_height(), 1e-6)
+    h_ratio = later.robust_height() / max(earlier.robust_height(), 1e-6)
     if not (cfg.min_height_ratio <= h_ratio <= cfg.max_height_ratio):
         return f"height_ratio {h_ratio:.2f}"
     return None

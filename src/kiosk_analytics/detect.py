@@ -84,7 +84,36 @@ class PersonDetector:
             dets = dets[keep]
             if masks is not None:
                 masks = [masks[i] for i in keep]
+        if self.cfg.containment_iom is not None and len(dets) > 1:
+            keep = _suppress_contained(dets[:, :4], dets[:, 4], self.cfg.containment_iom)
+            dets = dets[keep]
+            if masks is not None:
+                masks = [masks[i] for i in keep]
         return dets, masks
+
+
+def _suppress_contained(boxes: np.ndarray, scores: np.ndarray, iom_thresh: float) -> list[int]:
+    """Drop boxes mostly CONTAINED inside a higher-confidence box
+    (intersection / own-area > iom_thresh). Catches duplicate partial
+    detections — e.g. a torso-only box inside a full-body box — which
+    survive standard NMS (IoU ~0.5) and otherwise spawn persistent
+    parallel tracks that poison identity clustering."""
+    order = np.argsort(-scores)
+    keep: list[int] = []
+    for i in order:
+        x1, y1, x2, y2 = boxes[i]
+        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        contained = False
+        for j in keep:
+            xx1, yy1 = max(x1, boxes[j][0]), max(y1, boxes[j][1])
+            xx2, yy2 = min(x2, boxes[j][2]), min(y2, boxes[j][3])
+            inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+            if area > 0 and inter / area > iom_thresh:
+                contained = True
+                break
+        if not contained:
+            keep.append(int(i))
+    return sorted(keep)
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> list[int]:

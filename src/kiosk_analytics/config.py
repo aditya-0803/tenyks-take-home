@@ -25,6 +25,11 @@ class DetectorCfg:
     # (RT-DETR) can emit duplicate boxes for one person in crowds; the
     # duplicates spawn phantom tracks and cause ID churn. None = off.
     nms_iou: float | None = None
+    # Drop detections mostly contained inside a higher-confidence box
+    # (intersection / own-area). Duplicate partial boxes (torso inside a
+    # full-body box) survive plain NMS and spawn parallel phantom tracks
+    # that poison identity clustering. None = off.
+    containment_iom: float | None = 0.8
     # Region of interest [x1, y1, x2, y2]: detect only inside this crop
     # (coordinates mapped back to full frame). Upscaling the crop to imgsz
     # raises effective resolution on the queue (fewer merged boxes) and

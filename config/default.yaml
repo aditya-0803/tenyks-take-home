@@ -28,6 +28,9 @@ detector:
   roi: [350, 80, 1150, 720] # detect only around the kiosk area, upscaled to
                             # imgsz: ~2x effective resolution on the queue,
                             # no dining-area tracklets
+  containment_iom: 0.8      # drop boxes >=80% contained in a higher-conf box
+                            # (duplicate torso boxes survive NMS and spawn
+                            # phantom parallel tracks that poison clustering)
 
 tracker:
   type: bytetrack         # bytetrack | botsort | ocsort (via boxmot)
@@ -41,7 +44,9 @@ stitch:
   backend: auto           # auto -> boxmot OSNet, falls back to torchvision resnet18
   reid_weights: osnet_x1_0_msmt17.pt
   max_gap_s: 150.0        # max absence before we refuse to re-link a track
-  max_overlap_s: 1.0      # tolerate brief coexistence of one person's fragments
+  max_overlap_s: 5.0      # dying track can coast alongside its replacement at
+                          # occlusions (3.9s observed); genuine co-queuers coexist
+                          # for minutes, so 5s is still safely below ambiguity
   appearance_thresh: 0.26 # max cosine distance for a merge. OSNet on this
                           # footage: true merges <= 0.24, suspect pair at
                           # 0.294 -- threshold sits in the gap
