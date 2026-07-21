@@ -41,7 +41,7 @@ import logging
 import numpy as np
 
 from .config import StitchCfg
-from .tracklets import Tracklet, TrackletStore
+from .tracklets import Tracklet, TrackletStore, split_tracklet
 
 log = logging.getLogger(__name__)
 
@@ -132,8 +132,8 @@ class CropEmbedder:
         model.eval().to(self.device)
         return model
 
-    def embed_crops(self, crops: list[np.ndarray]) -> np.ndarray | None:
-        """crops: list of BGR uint8 arrays -> L2-normalised mean embedding."""
+    def embed_each(self, crops: list[np.ndarray]) -> np.ndarray | None:
+        """crops: list of BGR uint8 arrays -> (n, d) L2-normalised rows."""
         if not crops:
             return None
         if self._kind == "osnet":
@@ -153,6 +153,13 @@ class CropEmbedder:
             with torch.no_grad():
                 feats = self._impl(tensor).cpu().numpy()
         feats /= np.linalg.norm(feats, axis=1, keepdims=True) + 1e-9
+        return feats
+
+    def embed_crops(self, crops: list[np.ndarray]) -> np.ndarray | None:
+        """crops -> single L2-normalised mean embedding."""
+        feats = self.embed_each(crops)
+        if feats is None:
+            return None
         mean = feats.mean(axis=0)
         return mean / (np.linalg.norm(mean) + 1e-9)
 
@@ -217,6 +224,36 @@ def _overlap_mean_dist(earlier: Tracklet, later: Tracklet) -> float | None:
 
 def _cosine_dist(u: np.ndarray, v: np.ndarray) -> float:
     return float(1.0 - np.dot(u, v))
+
+
+def find_chimera_split(
+    times: list[float], feats: np.ndarray, thresh: float
+) -> tuple[float, float] | None:
+    """Detect a tracklet that contains TWO different people (identity theft
+    at a crossing: the track ID survives a merged-box event but continues
+    on the wrong person).
+
+    Scans every temporal split point (>= 2 crops per side) and measures the
+    cosine distance between the mean embeddings of the two sides. If the
+    best split separates the tracklet by more than `thresh` — a distance on
+    the scale of a DIFFERENT-person gap — returns (split_time, distance).
+    A single person's halves stay far below thresh.
+    """
+    n = len(feats)
+    if n < 4:
+        return None
+    best_d, best_k = -1.0, None
+    for k in range(2, n - 1):
+        a = feats[:k].mean(axis=0)
+        b = feats[k:].mean(axis=0)
+        a /= np.linalg.norm(a) + 1e-9
+        b /= np.linalg.norm(b) + 1e-9
+        d = _cosine_dist(a, b)
+        if d > best_d:
+            best_d, best_k = d, k
+    if best_k is None or best_d <= thresh:
+        return None
+    return (times[best_k - 1] + times[best_k]) / 2.0, best_d
 
 
 def cluster_tracklets(
@@ -317,20 +354,7 @@ def stitch_tracklets(
     person_ids are 1-based, ordered by first appearance. With stitching
     disabled the mapping is a relabelling of tracker IDs."""
     tracklets = store.by_start_time()
-    debug: dict = {
-        "backend": None,
-        "n_tracklets": len(tracklets),
-        "tracklets": [
-            {
-                "tid": tr.tid,
-                "start": round(tr.start, 1),
-                "end": round(tr.end, 1),
-                "robust_height": round(tr.robust_height(), 1),
-                "n_crops": len(tr.best_crops(cfg.crops_per_track)),
-            }
-            for tr in tracklets
-        ],
-    }
+    debug: dict = {"backend": None, "n_tracklets": len(tracklets), "chimera_splits": []}
     if cfg.enabled and len(tracklets) > 1:
         embedder = CropEmbedder(cfg.backend, cfg.reid_weights, device, cfg.allow_fallback)
         debug["backend"] = embedder.kind
@@ -341,6 +365,54 @@ def stitch_tracklets(
                 "and is likely meaningless here.", embedder.kind.upper(),
                 cfg.appearance_thresh,
             )
+
+        # ---- chimera pass: split tracklets that contain two people -------
+        if cfg.chimera_thresh is not None:
+            next_tid = max(store.tracklets) + 1
+            for tid in sorted(store.tracklets):
+                tr = store.tracklets[tid]
+                timeline = tr.timeline_crops(cfg.chimera_max_crops)
+                if len(timeline) < 4:
+                    continue
+                feats = embedder.embed_each([c for _, c in timeline])
+                found = find_chimera_split(
+                    [t for t, _ in timeline], feats, cfg.chimera_thresh
+                )
+                if found is None:
+                    continue
+                t_split, dist = found
+                first, second = split_tracklet(tr, t_split, next_tid)
+                if not first.times or not second.times:
+                    continue
+                store.tracklets[tid] = first
+                store.tracklets[next_tid] = second
+                debug["chimera_splits"].append(
+                    {
+                        "tid": tid,
+                        "new_tid": next_tid,
+                        "split_t": round(t_split, 1),
+                        "halves_dist": round(dist, 4),
+                    }
+                )
+                log.info(
+                    "Chimera split: tracklet %d cut at t=%.1fs "
+                    "(halves distance %.3f) -> new tracklet %d",
+                    tid, t_split, dist, next_tid,
+                )
+                next_tid += 1
+            tracklets = store.by_start_time()
+
+        debug["n_tracklets"] = len(tracklets)
+        debug["tracklets"] = [
+            {
+                "tid": tr.tid,
+                "start": round(tr.start, 1),
+                "end": round(tr.end, 1),
+                "robust_height": round(tr.robust_height(), 1),
+                "n_crops": len(tr.best_crops(cfg.crops_per_track)),
+            }
+            for tr in tracklets
+        ]
         crops = {tr.tid: tr.best_crops(cfg.crops_per_track) for tr in tracklets}
         embeddings = {tid: embedder.embed_crops(c) for tid, c in crops.items()}
         weights = {tid: len(c) for tid, c in crops.items()}

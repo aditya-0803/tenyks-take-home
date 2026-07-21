@@ -76,6 +76,20 @@ class Tracklet:
         ranked = sorted(self._crops.values(), key=lambda sc: -sc[0])
         return [crop for _, crop in ranked[:k]]
 
+    def timeline_crops(self, max_n: int = 40) -> list[tuple[float, np.ndarray]]:
+        """All kept crops in time order as (timestamp, crop), evenly
+        subsampled to max_n. Used for within-tracklet appearance
+        consistency checks (chimera detection)."""
+        entries = sorted(self._crops.items())
+        items = [
+            (bin_idx * CROP_BIN_S + CROP_BIN_S / 2, crop)
+            for bin_idx, (_, crop) in entries
+        ]
+        if len(items) > max_n:
+            idx = np.linspace(0, len(items) - 1, max_n).astype(int)
+            items = [items[i] for i in idx]
+        return items
+
     # --- geometry/timing helpers used by stitching -------------------------
     @property
     def start(self) -> float:
@@ -110,6 +124,22 @@ class Tracklet:
         (endpoint heights are corrupted exactly when tracks break)."""
         hs = [b[3] - b[1] for b in self.boxes]
         return float(np.percentile(hs, 75))
+
+
+def split_tracklet(tr: Tracklet, t_split: float, new_tid: int) -> tuple[Tracklet, Tracklet]:
+    """Partition a tracklet at t_split into (before, after). The first half
+    keeps the original tid; the second half gets new_tid. Used when a
+    tracklet is found to contain two different people (identity theft at
+    a crossing: the track continues, but on the wrong person)."""
+    a, b = Tracklet(tr.tid), Tracklet(new_tid)
+    for f, t, box, conf in zip(tr.frame_indices, tr.times, tr.boxes, tr.confs):
+        target = a if t < t_split else b
+        target.add(f, t, box, conf)
+    for bin_idx, entry in tr._crops.items():
+        t = bin_idx * CROP_BIN_S + CROP_BIN_S / 2
+        target = a if t < t_split else b
+        target._crops[bin_idx] = entry
+    return a, b
 
 
 class TrackletStore:

@@ -65,6 +65,11 @@ class StitchCfg:
     crops_per_track: int = 8
     save_debug: bool = True       # dump stitch_debug.json + crop montages
     allow_fallback: bool = False  # permit non-re-ID (ImageNet) embeddings
+    # Chimera detection: split a tracklet whose two temporal halves differ
+    # in appearance by more than this cosine distance (identity theft at a
+    # crossing leaves one tracklet containing two people). None = off.
+    chimera_thresh: float | None = 0.35
+    chimera_max_crops: int = 40   # crops embedded per tracklet for the check
 
 
 @dataclass

@@ -59,6 +59,11 @@ stitch:
   crops_per_track: 8      # best crops kept per tracklet for embedding
   save_debug: true        # write stitch_debug.json + crops/ montages
   allow_fallback: false   # fail loudly rather than stitch with non-re-ID features
+  chimera_thresh: 0.35    # split tracklets whose two temporal halves differ by
+                          # more than this (ID theft at a crossing leaves one
+                          # tracklet containing two people); splits logged in
+                          # stitch_debug.json under chimera_splits
+  chimera_max_crops: 40   # crops embedded per tracklet for the check
 
 analytics:
   membership: hybrid       # hybrid | bottom_strip | anchor

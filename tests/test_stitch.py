@@ -128,6 +128,41 @@ def test_new_arrival_not_absorbed():
     assert clusters == {frozenset({1}), frozenset({2})}
 
 
+# ---- chimera detection ----------------------------------------------------
+def test_chimera_split_detects_identity_theft():
+    """Tracklet whose first 4 crops are person A and last 6 are person B
+    (merged-box ID theft at a crossing) -> split lands at the boundary."""
+    from kiosk_analytics.stitch import find_chimera_split
+
+    e_a, e_b = unit([1, 0.05, 0]), unit([0, 1, 0.05])
+    feats = np.stack([e_a] * 4 + [e_b] * 6)
+    times = list(np.arange(10.5, 20.5, 1.0))
+    found = find_chimera_split(times, feats, thresh=0.35)
+    assert found is not None
+    t_split, dist = found
+    assert 13.5 < t_split < 15.5  # between 4th and 5th crop
+    assert dist > 0.8
+
+
+def test_no_chimera_split_for_single_person():
+    from kiosk_analytics.stitch import find_chimera_split
+
+    rng = np.random.default_rng(0)
+    base = unit([1, 0.2, 0.1])
+    feats = np.stack([unit(base + rng.normal(0, 0.05, 3)) for _ in range(10)])
+    assert find_chimera_split(list(range(10)), feats, thresh=0.35) is None
+
+
+def test_split_tracklet_partitions_observations():
+    from kiosk_analytics.tracklets import split_tracklet
+
+    tr = make_tracklet(7, 0, 90, n=10)  # samples at t=0,10,...,90
+    first, second = split_tracklet(tr, t_split=45.0, new_tid=1007)
+    assert first.tid == 7 and second.tid == 1007
+    assert len(first.times) == 5 and len(second.times) == 5
+    assert first.end < 45.0 <= second.start
+
+
 def test_missing_embedding_stays_singleton():
     a = make_tracklet(1, 0, 60)
     b = make_tracklet(2, 100, 160)
