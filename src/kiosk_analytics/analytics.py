@@ -164,13 +164,16 @@ def compute_person_results(
         dwell = float(sum(e - s for s, e in segments))
         engaged = dwell >= cfg.min_engagement_s
 
-        # cumulative dwell aligned to samples, for the overlay
+        # Cumulative dwell aligned to samples, for the overlay. Integrates
+        # the SAME final segments that dwell_s reports (including short
+        # merged gaps), so the video counter and persons.csv always agree.
         cum = np.zeros(len(times))
-        acc = 0.0
-        for i in range(1, len(times)):
-            dt = times[i] - times[i - 1]
-            if state[i] and state[i - 1] and dt <= bridge_dt:
-                acc += dt
+        for i, t in enumerate(times):
+            acc = 0.0
+            for s, e in segments:
+                if t <= s:
+                    break
+                acc += min(float(t), e) - s
             cum[i] = acc
 
         results.append(
