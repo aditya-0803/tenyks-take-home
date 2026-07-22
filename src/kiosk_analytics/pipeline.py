@@ -120,6 +120,20 @@ def run_pipeline(
     )
     summary = summarize(results)
     summary["runtime_s"] = round(time.time() - t0, 1)
+    # Peak GPU memory: evidence for the 16 GB edge-deployment constraint.
+    # (nvidia-smi shows ~0.5-1 GB more: CUDA context isn't counted here.)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            summary["peak_vram_alloc_gb"] = round(
+                torch.cuda.max_memory_allocated() / 2**30, 2
+            )
+            summary["peak_vram_reserved_gb"] = round(
+                torch.cuda.max_memory_reserved() / 2**30, 2
+            )
+    except Exception:  # noqa: BLE001 - metrics are best-effort
+        pass
     summary["raw_tracklets"] = len(store)
     summary["stitch_backend"] = stitch_debug.get("backend")
     summary["stitch_merges"] = len(stitch_debug.get("merges", []))

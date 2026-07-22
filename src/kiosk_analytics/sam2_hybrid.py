@@ -224,7 +224,12 @@ class Sam2HybridEngine:
                 masks_by_frame: dict[int, dict[int, np.ndarray]] = {}
                 start_frame = None  # first pass covers the whole chunk
                 for _ in range(self.cfg.max_repropagations):
-                    self._propagate(state, masks_by_frame, start_frame)
+                    # A chunk may open on an empty kiosk area: no prompts
+                    # yet -> nothing to propagate (SAM2 raises otherwise).
+                    # The entrant scan below then seeds the first persistent
+                    # detection anywhere in the chunk.
+                    if prompted:
+                        self._propagate(state, masks_by_frame, start_frame)
                     tracked_boxes = [
                         [b for b in (
                             _mask_to_box(m) for m in masks_by_frame.get(i, {}).values()
