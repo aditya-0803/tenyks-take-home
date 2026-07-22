@@ -13,7 +13,7 @@ import pandas as pd
 
 from .analytics import compute_person_results, summarize
 from .config import Config
-from .detect import PersonDetector, resolve_device
+from .detect import PersonDetector, resolve_device  # noqa: F401 (resolve_device used by sam3 branch)
 from .eval import evaluate, load_gt
 from .stitch import stitch_tracklets
 from .track import Tracker
@@ -43,32 +43,52 @@ def run_pipeline(
         reader.width, reader.height, reader.src_fps, reader.sample_fps, reader.stride,
     )
 
-    detector = PersonDetector(cfg.detector)
-    tracker = Tracker(cfg.tracker, device=detector.device)
     store = TrackletStore()
-
-    # ---- pass 1: detect + track -------------------------------------------
     n_processed = 0
-    for sample in reader:
-        dets, masks = detector(sample.image)
-        contaminated = _contamination_flags(dets)
-        tracks = tracker.update(dets, sample.image)
-        for x1, y1, x2, y2, tid, conf, det_ind in tracks:
-            di = int(det_ind)
-            mask = masks[di] if masks is not None and 0 <= di < len(masks) else None
-            dirty = bool(contaminated[di]) if 0 <= di < len(contaminated) else True
-            store.add_observation(
-                int(tid), sample.index, sample.t,
-                np.array([x1, y1, x2, y2]), float(conf), sample.image,
-                mask=mask, contaminated=dirty,
-            )
-        n_processed += 1
-        if n_processed % 500 == 0:
-            log.info("Processed %d frames (t=%.1fs)", n_processed, sample.t)
+
+    # ---- pass 1: person observations (engine-dependent) -------------------
+    if cfg.engine == "sam3":
+        from .sam3 import Sam3Engine
+
+        device = resolve_device(cfg.detector.device)
+        engine = Sam3Engine(cfg.sam3, roi=cfg.detector.roi)
+        for sample, observations in engine.stream(reader):
+            boxes = np.array([o.box for o in observations]).reshape(-1, 4)
+            contaminated = _contamination_flags(boxes)
+            for i, o in enumerate(observations):
+                store.add_observation(
+                    o.tid, sample.index, sample.t, o.box, o.conf, sample.image,
+                    mask=o.mask, contaminated=bool(contaminated[i]),
+                )
+            n_processed += 1
+            if n_processed % 500 == 0:
+                log.info("Processed %d frames (t=%.1fs)", n_processed, sample.t)
+    elif cfg.engine == "detect_track":
+        detector = PersonDetector(cfg.detector)
+        device = detector.device
+        tracker = Tracker(cfg.tracker, device=device)
+        for sample in reader:
+            dets, masks = detector(sample.image)
+            contaminated = _contamination_flags(dets)
+            tracks = tracker.update(dets, sample.image)
+            for x1, y1, x2, y2, tid, conf, det_ind in tracks:
+                di = int(det_ind)
+                mask = masks[di] if masks is not None and 0 <= di < len(masks) else None
+                dirty = bool(contaminated[di]) if 0 <= di < len(contaminated) else True
+                store.add_observation(
+                    int(tid), sample.index, sample.t,
+                    np.array([x1, y1, x2, y2]), float(conf), sample.image,
+                    mask=mask, contaminated=dirty,
+                )
+            n_processed += 1
+            if n_processed % 500 == 0:
+                log.info("Processed %d frames (t=%.1fs)", n_processed, sample.t)
+    else:
+        raise ValueError(f"Unknown engine '{cfg.engine}' (detect_track | sam3)")
     log.info("Tracking done: %d raw tracklets from %d frames", len(store), n_processed)
 
     # ---- pass 2: offline stitching ----------------------------------------
-    tid_to_pid, stitch_debug = stitch_tracklets(store, cfg.stitch, device=detector.device)
+    tid_to_pid, stitch_debug = stitch_tracklets(store, cfg.stitch, device=device)
     if cfg.stitch.save_debug:
         _dump_stitch_debug(out_dir, store, tid_to_pid, stitch_debug)
 

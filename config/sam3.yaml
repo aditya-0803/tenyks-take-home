@@ -1,3 +1,11 @@
+# SAM3 engine experiment: concept-prompted segment+track ('person').
+# Weights are GATED: request access at huggingface.co/facebook/sam3,
+# download sam3.pt into the repo root. Needs ultralytics>=8.3.237.
+# Zone/stitch/analytics identical to default.yaml; only the person-
+# observation engine differs. detector section is unused except roi.
+
+engine: sam3
+
 # Kiosk analytics pipeline configuration.
 # All time units are seconds, all coordinates are pixels in the source video.
 
@@ -11,8 +19,8 @@ zone_polygon:
   - [695, 345]
 
 video:
-  target_fps: 15.0        # tracker association degrades at low fps (motion gates
-                          # and persistence windows assume ~30 fps); 15 is the compromise
+  target_fps: 8.0         # SAM3 is heavy per frame; its memory tracker is
+                          # robust at low fps, unlike box-IoU association
 
 detector:
   model: yolo11m-seg.pt   # seg variant: masks purify re-ID crops (neighbour
@@ -83,3 +91,12 @@ viz:
   enabled: true
   show_zone: true
   show_out_of_zone: false # hide boxes for people outside the kiosk zone
+
+sam3:
+  model: sam3.pt
+  prompt: person
+  conf: 0.25
+  imgsz: 768              # ROI crop upscaled; raise if small people are missed
+  quantize: 16            # fp16 halves VRAM
+  chunk_s: 60.0           # fresh tracker state per chunk bounds memory-bank
+                          # growth; stitcher glues chunk-boundary fragments

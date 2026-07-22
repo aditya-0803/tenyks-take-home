@@ -1,4 +1,4 @@
-ultralytics>=8.3
+ultralytics>=8.3.237  # SAM3 support
 boxmot>=12,<15
 opencv-python>=4.9
 numpy>=1.26

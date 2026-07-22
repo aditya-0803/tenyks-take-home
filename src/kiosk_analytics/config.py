@@ -93,6 +93,26 @@ class AnalyticsCfg:
 
 
 @dataclass
+class Sam3Cfg:
+    """SAM 3 engine (concept-prompted segment + track), ultralytics>=8.3.237.
+
+    Replaces detector+tracker when Config.engine == "sam3". Weights are
+    gated: request access at huggingface.co/facebook/sam3, download
+    sam3.pt manually."""
+
+    model: str = "sam3.pt"
+    prompt: str = "person"
+    conf: float = 0.25
+    imgsz: int = 768
+    quantize: int | None = 16   # fp16: halves VRAM, keeps 16GB budget safe
+    # Process the video in chunks: SAM3's memory bank grows with tracked
+    # objects x frames. A fresh tracker state per chunk bounds VRAM; the
+    # offline stitcher glues chunk-boundary fragments (gap ~0s, spatially
+    # coincident), so identities survive.
+    chunk_s: float = 60.0
+
+
+@dataclass
 class VizCfg:
     enabled: bool = True
     show_zone: bool = True
@@ -103,9 +123,11 @@ class VizCfg:
 @dataclass
 class Config:
     zone_polygon: list[list[float]] = field(default_factory=list)
+    engine: str = "detect_track"  # detect_track (YOLO/RT-DETR + boxmot) | sam3
     video: VideoCfg = field(default_factory=VideoCfg)
     detector: DetectorCfg = field(default_factory=DetectorCfg)
     tracker: TrackerCfg = field(default_factory=TrackerCfg)
+    sam3: Sam3Cfg = field(default_factory=Sam3Cfg)
     stitch: StitchCfg = field(default_factory=StitchCfg)
     analytics: AnalyticsCfg = field(default_factory=AnalyticsCfg)
     viz: VizCfg = field(default_factory=VizCfg)
@@ -138,6 +160,7 @@ _SECTIONS = {
     "video": VideoCfg,
     "detector": DetectorCfg,
     "tracker": TrackerCfg,
+    "sam3": Sam3Cfg,
     "stitch": StitchCfg,
     "analytics": AnalyticsCfg,
     "viz": VizCfg,

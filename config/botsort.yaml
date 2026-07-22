@@ -36,9 +36,9 @@ detector:
   containment_iom: 0.8      # drop boxes >=80% contained in a higher-conf box
                             # (duplicate torso boxes survive NMS and spawn
                             # phantom parallel tracks that poison clustering)
-  max_wh_ratio: 0.7         # veto merged two-person boxes (single standing
-                            # person here is ~0.35-0.5 w/h; a box swallowing
-                            # two people is ~0.8). Prevents ID theft at source
+  max_wh_ratio: 0.85        # veto only EXTREME merged boxes; 0.7 was too
+                            # tight and vetoed a real person leaning over a
+                            # kiosk (dwell froze). Chimera handles the rest
 
 tracker:
   type: botsort           # A/B arm: appearance-aware online association --
