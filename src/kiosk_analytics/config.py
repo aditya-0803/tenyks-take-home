@@ -131,6 +131,8 @@ class Sam2HybridCfg:
     max_repropagations: int = 5  # discovery iterations per chunk
     min_mask_area: int = 150     # px; smaller masks = person effectively gone
     dedup_mask_iou: float = 0.6  # two objects on one person: drop the newer
+    vos_optimized: bool = False  # torch.compile'd propagation (~2x); first
+                                 # chunk pays minutes of compile latency
 
 
 @dataclass

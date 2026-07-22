@@ -96,10 +96,12 @@ sam2_hybrid:
   checkpoint: sam2.1_hiera_small.pt   # auto-downloads (ungated). Options:
                                       # tiny/small/base_plus/large
   model_cfg: configs/sam2.1/sam2.1_hiera_s.yaml
-  chunk_s: 20.0           # fresh SAM2 state per chunk; stitcher glues borders
+  chunk_s: 30.0           # fresh SAM2 state per chunk; stitcher glues borders
   prompt_conf: 0.5        # YOLO conf to seed a new SAM2 object
   new_person_iou: 0.3     # det unexplained by every tracked mask below this
   new_person_min_frames: 3
   max_repropagations: 5
   min_mask_area: 150
   dedup_mask_iou: 0.6
+  vos_optimized: true     # compiled propagation (~2x); first chunk pays a
+                          # few minutes of one-off compile latency

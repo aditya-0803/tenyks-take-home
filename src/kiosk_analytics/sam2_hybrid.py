@@ -126,7 +126,14 @@ class Sam2HybridEngine:
                 "pip install git+https://github.com/facebookresearch/sam2"
             ) from e
         ckpt = self._ensure_checkpoint(cfg.checkpoint)
-        self.predictor = build_sam2_video_predictor(cfg.model_cfg, ckpt, device=self.device)
+        kwargs = {}
+        if cfg.vos_optimized:
+            # torch.compile'd propagation path (~2x); first chunk pays a
+            # few minutes of compile latency — worth it for >=15-min runs.
+            kwargs["vos_optimized"] = True
+        self.predictor = build_sam2_video_predictor(
+            cfg.model_cfg, ckpt, device=self.device, **kwargs
+        )
         log.info("SAM2 video predictor ready (%s on %s)", cfg.checkpoint, self.device)
 
     @staticmethod
@@ -215,8 +222,9 @@ class Sam2HybridEngine:
                     next_obj += 1
 
                 masks_by_frame: dict[int, dict[int, np.ndarray]] = {}
+                start_frame = None  # first pass covers the whole chunk
                 for _ in range(self.cfg.max_repropagations):
-                    masks_by_frame = self._propagate(state)
+                    self._propagate(state, masks_by_frame, start_frame)
                     tracked_boxes = [
                         [b for b in (
                             _mask_to_box(m) for m in masks_by_frame.get(i, {}).values()
@@ -231,7 +239,7 @@ class Sam2HybridEngine:
                         break
                     frame_idx, boxes = entrant
                     log.info(
-                        "Chunk %d: %d new entrant(s) at frame %d — re-propagating",
+                        "Chunk %d: %d new entrant(s) at frame %d — propagating suffix",
                         chunk_idx, len(boxes), frame_idx,
                     )
                     for box in boxes:
@@ -240,6 +248,10 @@ class Sam2HybridEngine:
                         )
                         prompted.append((frame_idx, box))
                         next_obj += 1
+                    # Frames before the entrant's appearance are already
+                    # correct and untouched by the new prompt: re-propagate
+                    # the suffix only (major speedup vs full-chunk passes).
+                    start_frame = frame_idx
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -255,16 +267,25 @@ class Sam2HybridEngine:
         return max_tid + 1
 
     # ------------------------------------------------------------------
-    def _propagate(self, state) -> dict[int, dict[int, np.ndarray]]:
-        masks_by_frame: dict[int, dict[int, np.ndarray]] = {}
-        for frame_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(state):
+    def _propagate(
+        self,
+        state,
+        masks_by_frame: dict[int, dict[int, np.ndarray]],
+        start_frame: int | None = None,
+    ) -> None:
+        """Propagate and update masks_by_frame in place. start_frame=None
+        covers the whole chunk; an int re-propagates the suffix only
+        (frames before a newly added prompt are already final)."""
+        kwargs = {} if start_frame is None else {"start_frame_idx": start_frame}
+        for frame_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(
+            state, **kwargs
+        ):
             frame_masks = {}
             for j, obj_id in enumerate(obj_ids):
                 mask = (mask_logits[j] > 0.0).squeeze().cpu().numpy()
                 if mask.sum() >= self.cfg.min_mask_area:
                     frame_masks[int(obj_id)] = mask
             masks_by_frame[int(frame_idx)] = frame_masks
-        return masks_by_frame
 
     def _to_observations(
         self,
