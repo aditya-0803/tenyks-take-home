@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 
 import numpy as np
@@ -93,6 +94,11 @@ class Sam3Engine:
 
     # ------------------------------------------------------------------
     def _run_chunk(self, samples: list[FrameSample], tid_offset: int, chunk_idx: int):
+        import shutil
+        import tempfile
+
+        import cv2
+
         log.info(
             "SAM3 chunk %d: %d frames (t=%.1fs..%.1fs), tid offset %d",
             chunk_idx, len(samples), samples[0].t, samples[-1].t, tid_offset,
@@ -106,18 +112,36 @@ class Sam3Engine:
                 img = img[ry1:ry2, rx1:rx2]
             frames.append(img)
 
-        predictor = self._new_predictor()  # fresh tracker state per chunk
-        results = predictor(source=frames, text=[self.cfg.prompt], stream=True)
-
-        max_tid = tid_offset - 1
-        for sample, result in zip(samples, results):
-            obs = self._parse_result(
-                result, sample.image.shape[:2], (rx1, ry1), tid_offset
+        # Ultralytics' SAM3 video predictor requires an actual video source
+        # (its loader asserts video mode) — frame lists are treated as
+        # images. Write the chunk to a temporary mp4.
+        tmpdir = Path(tempfile.mkdtemp(prefix="sam3_chunk_"))
+        try:
+            chunk_path = tmpdir / "chunk.mp4"
+            h, w = frames[0].shape[:2]
+            writer = cv2.VideoWriter(
+                str(chunk_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (w, h)
             )
-            for o in obs:
-                max_tid = max(max_tid, o.tid)
-            yield sample, obs
-        del predictor  # release memory bank before the next chunk
+            for img in frames:
+                writer.write(img)
+            writer.release()
+
+            predictor = self._new_predictor()  # fresh tracker state per chunk
+            results = predictor(
+                source=str(chunk_path), text=[self.cfg.prompt], stream=True
+            )
+
+            max_tid = tid_offset - 1
+            for sample, result in zip(samples, results):
+                obs = self._parse_result(
+                    result, sample.image.shape[:2], (rx1, ry1), tid_offset
+                )
+                for o in obs:
+                    max_tid = max(max_tid, o.tid)
+                yield sample, obs
+            del predictor  # release memory bank before the next chunk
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
         return max_tid + 1
 
     # ------------------------------------------------------------------

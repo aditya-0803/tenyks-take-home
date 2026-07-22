@@ -39,13 +39,24 @@ def main() -> None:
     cap.release()
     print(f"Loaded {len(frames)} frames from {args.video}")
 
+    # The SAM3 video predictor requires a real video source (video-mode
+    # loader assertion) — write the probe frames to a small temp mp4.
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="sam3_probe_")) / "probe.mp4"
+    h, w = frames[0].shape[:2]
+    writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (w, h))
+    for f in frames:
+        writer.write(f)
+    writer.release()
+
     predictor = SAM3VideoSemanticPredictor(
         overrides=dict(
             task="segment", mode="predict", model=args.model,
             imgsz=args.imgsz, conf=0.25, quantize=16, save=False, verbose=False,
         )
     )
-    results = predictor(source=frames, text=["person"], stream=True)
+    results = predictor(source=str(tmp), text=["person"], stream=True)
 
     for i, r in enumerate(results):
         print(f"\n--- frame {i} ---")
