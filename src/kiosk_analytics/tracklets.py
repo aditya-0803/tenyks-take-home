@@ -35,6 +35,11 @@ class Tracklet:
     confs: list[float] = field(default_factory=list)
     # time-bin -> (quality score, crop); winnowed to top-k at read time
     _crops: dict[int, tuple[float, np.ndarray]] = field(default_factory=dict)
+    # Fallback bin: crops from frames where the box overlapped another
+    # detection. Masks purify these substantially, so they are usable when
+    # a tracklet spends its whole life in a crowd — a weak embedding beats
+    # a missing one (embedding-less tracklets can never be re-linked).
+    _crops_dirty: dict[int, tuple[float, np.ndarray]] = field(default_factory=dict)
 
     def add(self, frame_idx: int, t: float, box: np.ndarray, conf: float) -> None:
         self.frame_indices.append(frame_idx)
@@ -60,13 +65,10 @@ class Tracklet:
         a box routinely contains half of the adjacent person).
 
         Frames flagged `contaminated` (box overlapping another detection)
-        are never harvested: crops containing pieces of two people poison
-        embeddings, seed wrong merges, and blunt chimera detection. A
-        tracklet with zero clean frames ends up with no embedding and
-        safely stays a singleton.
+        go to a fallback store: clean crops are always preferred for
+        embeddings, but a tracklet that lived its whole life in a crowd
+        still gets a (mask-purified) embedding instead of none at all.
         """
-        if contaminated:
-            return
         x1, y1, x2, y2 = (int(round(v)) for v in box)
         x1, y1 = max(x1, 0), max(y1, 0)
         x2, y2 = min(x2, frame.shape[1]), min(y2, frame.shape[0])
@@ -74,22 +76,29 @@ class Tracklet:
             return
         score = conf * np.sqrt((x2 - x1) * (y2 - y1))
         bin_idx = int(t / CROP_BIN_S)
-        prev = self._crops.get(bin_idx)
+        target = self._crops_dirty if contaminated else self._crops
+        prev = target.get(bin_idx)
         if prev is None or score > prev[0]:
             crop = frame[y1:y2, x1:x2]
             if mask is not None:
                 crop = crop * mask[y1:y2, x1:x2, None].astype(crop.dtype)
-            self._crops[bin_idx] = (score, _letterbox(crop, CROP_SIZE))
+            target[bin_idx] = (score, _letterbox(crop, CROP_SIZE))
 
     def best_crops(self, k: int) -> list[np.ndarray]:
         ranked = sorted(self._crops.values(), key=lambda sc: -sc[0])
+        if not ranked:  # crowd-only tracklet: fall back to purified dirty crops
+            ranked = sorted(self._crops_dirty.values(), key=lambda sc: -sc[0])
         return [crop for _, crop in ranked[:k]]
 
     def timeline_crops(self, max_n: int = 40) -> list[tuple[float, np.ndarray]]:
         """All kept crops in time order as (timestamp, crop), evenly
         subsampled to max_n. Used for within-tracklet appearance
-        consistency checks (chimera detection)."""
-        entries = sorted(self._crops.items())
+        consistency checks (chimera detection). Falls back to including
+        dirty crops when clean ones are too sparse."""
+        source = self._crops
+        if len(source) < 4:
+            source = {**self._crops_dirty, **self._crops}  # clean wins bins
+        entries = sorted(source.items())
         items = [
             (bin_idx * CROP_BIN_S + CROP_BIN_S / 2, crop)
             for bin_idx, (_, crop) in entries
@@ -148,6 +157,10 @@ def split_tracklet(tr: Tracklet, t_split: float, new_tid: int) -> tuple[Tracklet
         t = bin_idx * CROP_BIN_S + CROP_BIN_S / 2
         target = a if t < t_split else b
         target._crops[bin_idx] = entry
+    for bin_idx, entry in tr._crops_dirty.items():
+        t = bin_idx * CROP_BIN_S + CROP_BIN_S / 2
+        target = a if t < t_split else b
+        target._crops_dirty[bin_idx] = entry
     return a, b
 
 

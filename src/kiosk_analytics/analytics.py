@@ -161,6 +161,9 @@ def compute_person_results(
 
         segments = _segments_from_state(times, state, max_dt=bridge_dt)
         segments = merge_segments(segments, cfg.merge_gap_s)
+        # Passby filter: a visit shorter than min_segment_s is someone
+        # passing through the zone — it contributes nothing to dwell.
+        segments = [(s, e) for s, e in segments if e - s >= cfg.min_segment_s]
         dwell = float(sum(e - s for s, e in segments))
         engaged = dwell >= cfg.min_engagement_s
 

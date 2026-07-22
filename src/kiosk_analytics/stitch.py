@@ -45,6 +45,8 @@ from .tracklets import Tracklet, TrackletStore, split_tracklet
 
 log = logging.getLogger(__name__)
 
+INF = 1e6
+
 
 # --------------------------------------------------------------------------
 # Appearance embeddings
@@ -226,6 +228,43 @@ def _cosine_dist(u: np.ndarray, v: np.ndarray) -> float:
     return float(1.0 - np.dot(u, v))
 
 
+def _box_iou(a: np.ndarray, b: np.ndarray) -> float:
+    xx1, yy1 = max(a[0], b[0]), max(a[1], b[1])
+    xx2, yy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    return float(inter / (area_a + area_b - inter + 1e-9))
+
+
+def continuity_links(tracklets: list[Tracklet], cfg: StitchCfg) -> list[tuple[int, int]]:
+    """Hard merges on spatial continuity: tracklet B starting within
+    continuity_max_gap_s of A's end with essentially coincident boxes is
+    the same human (nobody teleports in <1s). This is what makes CHUNK
+    BOUNDARIES invisible — no appearance evidence needed, so it works even
+    when embeddings are starved in crowds. Greedy one-to-one by IoU."""
+    candidates = []
+    for a in tracklets:
+        for b in tracklets:
+            if a.tid == b.tid:
+                continue
+            gap = b.start - a.end
+            if not (0.0 <= gap <= cfg.continuity_max_gap_s):
+                continue
+            iou = _box_iou(a.boxes[-1], b.boxes[0])
+            if iou >= cfg.continuity_min_iou:
+                candidates.append((iou, a.tid, b.tid))
+    candidates.sort(reverse=True)
+    links, used_pred, used_succ = [], set(), set()
+    for iou, a_tid, b_tid in candidates:
+        if a_tid in used_pred or b_tid in used_succ:
+            continue
+        links.append((a_tid, b_tid))
+        used_pred.add(a_tid)
+        used_succ.add(b_tid)
+    return links
+
+
 def find_chimera_split(
     times: list[float], feats: np.ndarray, thresh: float
 ) -> tuple[float, float] | None:
@@ -261,13 +300,16 @@ def cluster_tracklets(
     embeddings: dict[int, np.ndarray | None],
     weights: dict[int, int],
     cfg: StitchCfg,
+    forced_links: list[tuple[int, int]] | None = None,
 ) -> tuple[list[set[int]], dict]:
     """Constrained agglomerative clustering.
 
-    Returns (clusters as sets of tids, debug info). Clusters merge
-    greedily by smallest cosine distance between pooled embeddings,
-    subject to every cross-pair of members passing pair_allowed, until
-    no admissible pair is closer than appearance_thresh.
+    Returns (clusters as sets of tids, debug info). forced_links (e.g.
+    spatial-continuity chunk-boundary pairs) are merged unconditionally
+    before appearance clustering begins. Then clusters merge greedily by
+    smallest cosine distance between pooled embeddings, subject to every
+    cross-pair of members passing pair_allowed, until no admissible pair
+    is closer than the (gap-tiered) appearance threshold.
     """
     idx = {tr.tid: tr for tr in tracklets}
     allowed_cache: dict[tuple[int, int], bool] = {}
@@ -278,14 +320,52 @@ def cluster_tracklets(
             allowed_cache[key] = pair_allowed(idx[t1], idx[t2], cfg)
         return allowed_cache[key]
 
-    clusters: list[dict] = [
-        {
-            "members": {tr.tid},
-            "emb": embeddings.get(tr.tid),
-            "w": max(weights.get(tr.tid, 1), 1),
-        }
-        for tr in tracklets
-    ]
+    # Seed clusters from forced links via union-find.
+    uf_parent = {tr.tid: tr.tid for tr in tracklets}
+
+    def find(x):
+        while uf_parent[x] != x:
+            uf_parent[x] = uf_parent[uf_parent[x]]
+            x = uf_parent[x]
+        return x
+
+    for a, b in forced_links or []:
+        if a in uf_parent and b in uf_parent:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                uf_parent[rb] = ra
+    groups: dict[int, set[int]] = {}
+    for tr in tracklets:
+        groups.setdefault(find(tr.tid), set()).add(tr.tid)
+
+    clusters: list[dict] = []
+    for members in groups.values():
+        embs = [
+            (embeddings[t], max(weights.get(t, 1), 1))
+            for t in members
+            if embeddings.get(t) is not None
+        ]
+        if embs:
+            pooled = sum(e * w for e, w in embs)
+            pooled = pooled / (np.linalg.norm(pooled) + 1e-9)
+            w_total = sum(w for _, w in embs)
+        else:
+            pooled, w_total = None, 1
+        clusters.append({"members": set(members), "emb": pooled, "w": w_total})
+
+    def merge_thresh(ci: dict, cj: dict) -> float:
+        """Gap-tiered: short absences drift less in appearance."""
+        min_gap = INF
+        for t1 in ci["members"]:
+            for t2 in cj["members"]:
+                a, b = idx[t1], idx[t2]
+                earlier, later = (a, b) if a.start <= b.start else (b, a)
+                min_gap = min(min_gap, max(0.0, later.start - earlier.end))
+        return (
+            cfg.appearance_thresh_short
+            if min_gap <= cfg.short_gap_s
+            else cfg.appearance_thresh
+        )
 
     debug_pairs = []
     for i, a in enumerate(tracklets):
@@ -317,7 +397,7 @@ def cluster_tracklets(
                 if cj["emb"] is None:
                     continue
                 d = _cosine_dist(ci["emb"], cj["emb"])
-                if d >= cfg.appearance_thresh:
+                if d >= merge_thresh(ci, cj):
                     continue
                 if best is not None and d >= best[0]:
                     continue
@@ -419,7 +499,12 @@ def stitch_tracklets(
         debug["tracklets_without_embedding"] = sorted(
             t for t, e in embeddings.items() if e is None
         )
-        clusters, cluster_debug = cluster_tracklets(tracklets, embeddings, weights, cfg)
+        forced = continuity_links(tracklets, cfg)
+        debug["continuity_links"] = [{"from_tid": a, "to_tid": b} for a, b in forced]
+        log.info("Continuity links (chunk-boundary glue): %d", len(forced))
+        clusters, cluster_debug = cluster_tracklets(
+            tracklets, embeddings, weights, cfg, forced_links=forced
+        )
         debug.update(cluster_debug)
         n_merged = sum(len(c) - 1 for c in clusters)
         log.info(

@@ -23,11 +23,14 @@ def test_single_detection_clean():
     assert _contamination_flags(dets).tolist() == [False]
 
 
-def test_contaminated_frames_never_harvested():
+def test_contaminated_crops_are_fallback_only():
+    """Clean crops always win; but a tracklet that lived its whole life in
+    a crowd still gets (purified) fallback crops instead of none — an
+    embedding-less tracklet can never be re-linked."""
     tr = Tracklet(1)
     frame = np.full((400, 400, 3), 128, dtype=np.uint8)
     box = np.array([100.0, 100.0, 180.0, 300.0])
     tr.add_crop_candidate(frame, box, conf=0.9, t=1.0, contaminated=True)
-    assert tr.best_crops(8) == []
+    assert len(tr.best_crops(8)) == 1  # fallback engaged
     tr.add_crop_candidate(frame, box, conf=0.9, t=2.0, contaminated=False)
-    assert len(tr.best_crops(8)) == 1
+    assert len(tr.best_crops(8)) == 1  # clean crop preferred, dirty ignored

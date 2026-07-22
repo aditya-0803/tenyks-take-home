@@ -53,7 +53,8 @@ def test_dwell_policy_a_excludes_gap():
     times = np.arange(0, 61, 1.0)
     xs = [50 if (t <= 20 or t >= 50) else 200 for t in times]
     identity = {1: make_identity(times, xs)}
-    cfg = AnalyticsCfg(hysteresis_samples=1, merge_gap_s=2.0, min_engagement_s=8.0)
+    cfg = AnalyticsCfg(hysteresis_samples=1, merge_gap_s=2.0, min_engagement_s=8.0,
+                       min_segment_s=0.0)  # passby filter off: testing policy (a)
     results, _ = compute_person_results(identity, SQUARE, cfg, sample_period=1.0)
     assert len(results) == 1
     r = results[0]
@@ -78,9 +79,32 @@ def test_undetected_gap_not_credited():
     times = np.concatenate([np.arange(0, 11, 1.0), np.arange(100, 111, 1.0)])
     xs = [50] * len(times)
     identity = {1: make_identity(times, xs)}
-    cfg = AnalyticsCfg(hysteresis_samples=1, merge_gap_s=2.0, min_engagement_s=8.0)
+    cfg = AnalyticsCfg(hysteresis_samples=1, merge_gap_s=2.0, min_engagement_s=8.0,
+                       min_segment_s=0.0)  # passby filter off: testing gap crediting
     results, _ = compute_person_results(identity, SQUARE, cfg, sample_period=1.0)
     assert results[0].dwell_s == pytest.approx(20.0, abs=2.0)
+
+
+def test_passby_segment_contributes_nothing():
+    """A 6s walk-through by an otherwise-engaged person adds nothing to
+    their dwell; two 6s passes never sum into a phantom engagement."""
+    times = np.arange(0, 81, 1.0)
+    # in zone 0-30s (real visit), out until 60, brief 6s pass 60-66
+    xs = [50 if (t <= 30 or 60 <= t <= 66) else 300 for t in times]
+    identity = {1: make_identity(times, xs)}
+    cfg = AnalyticsCfg(hysteresis_samples=1, merge_gap_s=2.0,
+                       min_segment_s=12.0, min_engagement_s=8.0)
+    results, _ = compute_person_results(identity, SQUARE, cfg, sample_period=1.0)
+    r = results[0]
+    assert len(r.segments) == 1
+    assert r.dwell_s == pytest.approx(30.0, abs=2.0)  # pass not counted
+
+    # only two short passes -> not engaged at all
+    xs2 = [50 if (t <= 6 or 40 <= t <= 46) else 300 for t in times]
+    identity2 = {1: make_identity(times, xs2)}
+    results2, _ = compute_person_results(identity2, SQUARE, cfg, sample_period=1.0)
+    assert not results2[0].engaged
+    assert results2[0].dwell_s == 0.0
 
 
 def test_short_track_dropped():

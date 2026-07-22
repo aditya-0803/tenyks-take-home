@@ -65,6 +65,22 @@ class StitchCfg:
     # people whose fragments overlap briefly stand apart and stay split.
     overlap_max_dist_px: float = 120.0
     appearance_thresh: float = 0.45
+    # CONTINUITY MERGES: tracklet B starting within this gap of tracklet A's
+    # end, with their boxes essentially coincident, is the same human with
+    # near-certainty (nobody teleports in <1s). Merged on spatial evidence
+    # alone — makes chunk-boundary fragmentation invisible by construction
+    # and is immune to embedding starvation.
+    continuity_max_gap_s: float = 0.75
+    continuity_min_iou: float = 0.5
+    # Gap-tiered appearance: short absences drift less in appearance, so
+    # they get a looser merge bar than long returns.
+    appearance_thresh_short: float = 0.34
+    short_gap_s: float = 10.0
+    # Crop-harvest contamination threshold (box intersection / own-area
+    # with another detection). Masks already zero out neighbours, so this
+    # can be permissive; contaminated crops are kept as FALLBACK so no
+    # tracklet is ever embedding-less.
+    crop_contamination_iom: float = 0.45
     max_speed_px_s: float = 400.0
     min_height_ratio: float = 0.6
     max_height_ratio: float = 1.7
@@ -88,6 +104,12 @@ class AnalyticsCfg:
                                       # also counts (feet occluded by kiosk)
     hysteresis_samples: int = 3
     merge_gap_s: float = 3.0
+    # PASSBY FILTER: an in-zone segment shorter than this is someone
+    # passing through, not engaging — it contributes NOTHING to dwell.
+    # Applied after segment merging, so brief occlusion gaps don't split
+    # a real visit below the bar. Per-visit, unlike min_engagement_s
+    # which thresholds the total.
+    min_segment_s: float = 12.0
     min_engagement_s: float = 8.0
     min_track_len_s: float = 1.0
 

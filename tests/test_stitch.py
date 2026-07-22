@@ -128,6 +128,56 @@ def test_new_arrival_not_absorbed():
     assert clusters == {frozenset({1}), frozenset({2})}
 
 
+# ---- continuity links (chunk-boundary glue) -------------------------------
+def test_chunk_boundary_glued_without_appearance():
+    """Fragments split by a chunk boundary (gap ~0.1s, coincident boxes)
+    must merge even with NO embeddings — spatial continuity is proof."""
+    from kiosk_analytics.stitch import continuity_links
+
+    a = make_tracklet(1, 0, 45.0, x=500)
+    b = make_tracklet(2, 45.1, 90, x=502)   # next chunk, same spot
+    c = make_tracklet(3, 45.1, 90, x=900)   # different person, far away
+    links = continuity_links([a, b, c], CFG)
+    assert links == [(1, 2)]
+
+    clusters, _ = cluster_tracklets(
+        [a, b, c], {1: None, 2: None, 3: None}, {}, CFG, forced_links=links
+    )
+    assert {frozenset(cl) for cl in clusters} == {frozenset({1, 2}), frozenset({3})}
+
+
+def test_continuity_one_to_one():
+    """Two candidates after one ender: only the best-IoU pairing links."""
+    from kiosk_analytics.stitch import continuity_links
+
+    a = make_tracklet(1, 0, 45.0, x=500)
+    b = make_tracklet(2, 45.1, 90, x=501)   # near-perfect continuation
+    c = make_tracklet(3, 45.1, 90, x=530)   # overlaps somewhat, worse IoU
+    links = continuity_links([a, b, c], CFG)
+    assert (1, 2) in links
+    assert all(link[1] != 3 or link[0] != 1 for link in links)
+
+
+def test_gap_tiered_threshold_allows_short_absence_rematch():
+    """Cost 0.30 merge: rejected across a long gap (> short_gap_s), accepted
+    across a short absence."""
+    cfg = StitchCfg(
+        max_gap_s=100.0, appearance_thresh=0.26, appearance_thresh_short=0.34,
+        short_gap_s=10.0, max_speed_px_s=400.0,
+    )
+    e1, e2 = unit([1, 0, 0]), unit([1, 1, 0])  # cosine dist ~0.293
+    d = 1 - float(np.dot(e1, e2))
+    assert 0.26 < d < 0.34
+
+    short = [make_tracklet(1, 0, 50), make_tracklet(2, 55, 90)]     # 5s gap
+    clusters, _ = cluster_tracklets(short, {1: e1, 2: e2}, {}, cfg)
+    assert {frozenset(c) for c in clusters} == {frozenset({1, 2})}
+
+    long_ = [make_tracklet(1, 0, 50), make_tracklet(2, 80, 120)]    # 30s gap
+    clusters, _ = cluster_tracklets(long_, {1: e1, 2: e2}, {}, cfg)
+    assert {frozenset(c) for c in clusters} == {frozenset({1}), frozenset({2})}
+
+
 # ---- chimera detection ----------------------------------------------------
 def test_chimera_split_detects_identity_theft():
     """Tracklet whose first 4 crops are person A and last 6 are person B

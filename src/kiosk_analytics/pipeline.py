@@ -59,7 +59,7 @@ def run_pipeline(
             engine = Sam2HybridEngine(cfg.sam2_hybrid, cfg.detector)
         for sample, observations in engine.stream(reader):
             boxes = np.array([o.box for o in observations]).reshape(-1, 4)
-            contaminated = _contamination_flags(boxes)
+            contaminated = _contamination_flags(boxes, cfg.stitch.crop_contamination_iom)
             for i, o in enumerate(observations):
                 store.add_observation(
                     o.tid, sample.index, sample.t, o.box, o.conf, sample.image,
@@ -74,7 +74,7 @@ def run_pipeline(
         tracker = Tracker(cfg.tracker, device=device)
         for sample in reader:
             dets, masks = detector(sample.image)
-            contaminated = _contamination_flags(dets)
+            contaminated = _contamination_flags(dets, cfg.stitch.crop_contamination_iom)
             tracks = tracker.update(dets, sample.image)
             for x1, y1, x2, y2, tid, conf, det_ind in tracks:
                 di = int(det_ind)

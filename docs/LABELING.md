@@ -12,10 +12,14 @@ policy exactly.
   keep it visible while labelling.
 - **In-zone**: the person's feet (bottom-centre of their body) are inside
   the polygon.
-- **Dwell time (policy a)**: the sum of a person's in-zone segments.
-  Time spent outside the zone between segments is excluded.
-- **Engaged person**: total dwell >= `min_engagement_s` (default 8 s).
-  People below the threshold (walk-throughs) are NOT labelled.
+- **Passby (per visit)**: an in-zone visit shorter than `min_segment_s`
+  (default 12 s) is a walk-through — do NOT label that segment, even for
+  a person who has other, longer visits. (Brief occlusion gaps <= 3 s
+  within one visit do not split it.)
+- **Dwell time (policy a)**: the sum of a person's in-zone segments that
+  each last >= 12 s. Time outside the zone between segments is excluded.
+- **Engaged person**: has at least one labelled (>= 12 s) segment.
+  People with only passby visits are NOT labelled.
 
 ## Procedure
 

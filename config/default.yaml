@@ -53,9 +53,14 @@ stitch:
   overlap_max_dist_px: 120 # overlapping fragments must COINCIDE spatially to
                           # merge (coasting duplicate); two real people whose
                           # fragments overlap briefly stand apart -> stay split
-  appearance_thresh: 0.26 # max cosine distance for a merge. OSNet on this
-                          # footage: true merges <= 0.24, suspect pair at
-                          # 0.294 -- threshold sits in the gap
+  appearance_thresh: 0.26 # long-gap merge bar (OSNet on this footage:
+                          # true merges <= 0.24, different people >= 0.28)
+  appearance_thresh_short: 0.34 # short absences drift less in appearance
+  short_gap_s: 10.0
+  continuity_max_gap_s: 0.75 # chunk-boundary glue: coincident boxes within
+  continuity_min_iou: 0.5    # this gap = same human, merged unconditionally
+  crop_contamination_iom: 0.45 # was 0.2 (starved embeddings in queues);
+                          # contaminated crops now kept as fallback anyway
   max_speed_px_s: 400.0   # exit->entry displacement plausibility gate
   min_height_ratio: 0.6   # box-height similarity gate between linked tracks
   max_height_ratio: 1.7
@@ -76,6 +81,9 @@ analytics:
   anchor: bottom_center    # only used when membership: anchor
   hysteresis_samples: 3   # consecutive samples required to flip in/out state
   merge_gap_s: 3.0        # in-zone segments closer than this are merged
+  min_segment_s: 12.0     # PASSBY FILTER: a visit shorter than this is a
+                          # walk-through and adds NOTHING to dwell (per
+                          # visit; applied after segment merging)
   min_engagement_s: 8.0   # total dwell below this => walk-through, not counted
   min_track_len_s: 1.0    # discard tracks shorter than this (detector noise)
 
