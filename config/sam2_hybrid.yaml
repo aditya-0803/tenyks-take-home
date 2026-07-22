@@ -103,5 +103,6 @@ sam2_hybrid:
   max_repropagations: 5
   min_mask_area: 150
   dedup_mask_iou: 0.6
-  vos_optimized: true     # compiled propagation (~2x); first chunk pays a
-                          # few minutes of one-off compile latency
+  vos_optimized: false    # compiled path crashes (CUDAGraphs tensor-overwrite
+                          # inside SAM2's kernels on torch 2.11); bf16 + suffix
+                          # re-propagation carry the speedup instead
