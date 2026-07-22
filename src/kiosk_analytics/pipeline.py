@@ -47,11 +47,16 @@ def run_pipeline(
     n_processed = 0
 
     # ---- pass 1: person observations (engine-dependent) -------------------
-    if cfg.engine == "sam3":
-        from .sam3 import Sam3Engine
-
+    if cfg.engine in ("sam3", "sam2_hybrid"):
         device = resolve_device(cfg.detector.device)
-        engine = Sam3Engine(cfg.sam3, roi=cfg.detector.roi)
+        if cfg.engine == "sam3":
+            from .sam3 import Sam3Engine
+
+            engine = Sam3Engine(cfg.sam3, roi=cfg.detector.roi)
+        else:
+            from .sam2_hybrid import Sam2HybridEngine
+
+            engine = Sam2HybridEngine(cfg.sam2_hybrid, cfg.detector)
         for sample, observations in engine.stream(reader):
             boxes = np.array([o.box for o in observations]).reshape(-1, 4)
             contaminated = _contamination_flags(boxes)

@@ -113,6 +113,27 @@ class Sam3Cfg:
 
 
 @dataclass
+class Sam2HybridCfg:
+    """Hybrid engine: YOLO discovers people, SAM2.1's memory tracker owns
+    their identities (mask propagation, not box-IoU association). Needs
+    `pip install git+https://github.com/facebookresearch/sam2`; the
+    checkpoint auto-downloads (ungated)."""
+
+    checkpoint: str = "sam2.1_hiera_small.pt"
+    model_cfg: str = "configs/sam2.1/sam2.1_hiera_s.yaml"
+    chunk_s: float = 20.0        # fresh tracker state per chunk bounds VRAM;
+                                 # stitcher glues chunk-boundary fragments
+    prompt_conf: float = 0.5     # YOLO conf required to seed a new SAM2 object
+    new_person_iou: float = 0.3  # detection is "unexplained" if IoU with every
+                                 # tracked mask-box stays below this
+    new_person_min_frames: int = 3  # consecutive unexplained frames to count
+                                    # as a real new entrant (kills flicker)
+    max_repropagations: int = 5  # discovery iterations per chunk
+    min_mask_area: int = 150     # px; smaller masks = person effectively gone
+    dedup_mask_iou: float = 0.6  # two objects on one person: drop the newer
+
+
+@dataclass
 class VizCfg:
     enabled: bool = True
     show_zone: bool = True
@@ -123,11 +144,12 @@ class VizCfg:
 @dataclass
 class Config:
     zone_polygon: list[list[float]] = field(default_factory=list)
-    engine: str = "detect_track"  # detect_track (YOLO/RT-DETR + boxmot) | sam3
+    engine: str = "detect_track"  # detect_track | sam3 | sam2_hybrid
     video: VideoCfg = field(default_factory=VideoCfg)
     detector: DetectorCfg = field(default_factory=DetectorCfg)
     tracker: TrackerCfg = field(default_factory=TrackerCfg)
     sam3: Sam3Cfg = field(default_factory=Sam3Cfg)
+    sam2_hybrid: Sam2HybridCfg = field(default_factory=Sam2HybridCfg)
     stitch: StitchCfg = field(default_factory=StitchCfg)
     analytics: AnalyticsCfg = field(default_factory=AnalyticsCfg)
     viz: VizCfg = field(default_factory=VizCfg)
@@ -161,6 +183,7 @@ _SECTIONS = {
     "detector": DetectorCfg,
     "tracker": TrackerCfg,
     "sam3": Sam3Cfg,
+    "sam2_hybrid": Sam2HybridCfg,
     "stitch": StitchCfg,
     "analytics": AnalyticsCfg,
     "viz": VizCfg,
