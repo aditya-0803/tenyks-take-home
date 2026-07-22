@@ -188,9 +188,20 @@ class Sam2HybridEngine:
                 cv2.imwrite(str(tmpdir / f"{i:05d}.jpg"), img,
                             [cv2.IMWRITE_JPEG_QUALITY, 92])
 
+            import contextlib
+
             import torch
 
-            with torch.inference_mode():
+            # SAM2's reference implementation runs under bf16 autocast and
+            # parts of the model assume it: without this, the memory bank
+            # holds bf16 tensors while later passes feed fp32 (dtype crash
+            # on re-propagation after adding a prompt).
+            autocast = (
+                torch.autocast("cuda", dtype=torch.bfloat16)
+                if "cuda" in str(self.device)
+                else contextlib.nullcontext()
+            )
+            with torch.inference_mode(), autocast:
                 state = self.predictor.init_state(
                     video_path=str(tmpdir), offload_video_to_cpu=True
                 )
